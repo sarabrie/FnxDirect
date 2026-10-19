@@ -218,7 +218,13 @@ if question:
                 answer, sources = str(error), []
             except Exception as error:
                 print(f"שגיאה ביצירת תשובה: {type(error).__name__}: {error}")
-                answer = "לא הצלחתי לקבל תשובה כרגע. בדקו את החיבור ונסו שוב."
+                if (
+                    getattr(error, "code", None) == 429
+                    or "RESOURCE_EXHAUSTED" in str(error)
+                ):
+                    answer = "מכסת השימוש ב-Gemini הסתיימה. נסו שוב לאחר איפוס המכסה, או בדקו את מגבלות התוכנית והחיוב בחשבון Google AI."
+                else:
+                    answer = "לא הצלחתי לקבל תשובה כרגע. בדקו את החיבור ונסו שוב."
                 sources = []
         st.markdown(answer)
         if sources:
