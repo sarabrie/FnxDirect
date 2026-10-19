@@ -8,10 +8,10 @@ import streamlit as st
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from chat_history import (
     conversation_exists,
-    create_conversation,
     initialize_history,
     list_conversations,
     load_messages,
+    new_conversation_id,
     save_message,
 )
 
@@ -28,11 +28,14 @@ initialize_history()
 requested_conversation_id = st.query_params.get("conversation")
 if (
     requested_conversation_id
-    and conversation_exists(requested_conversation_id)
+    and (
+        conversation_exists(requested_conversation_id)
+        or st.session_state.get("conversation_id") == requested_conversation_id
+    )
 ):
     conversation_id = requested_conversation_id
 else:
-    conversation_id = create_conversation()
+    conversation_id = new_conversation_id()
     st.query_params["conversation"] = conversation_id
 
 if st.session_state.get("conversation_id") != conversation_id:
@@ -154,7 +157,7 @@ with st.sidebar:
     st.markdown("### הפניקס")
     st.caption("עוזר מידע אישי")
     if st.button("שיחה חדשה", use_container_width=True):
-        conversation_id = create_conversation()
+        conversation_id = new_conversation_id()
         st.session_state.conversation_id = conversation_id
         st.session_state.messages = []
         st.query_params["conversation"] = conversation_id

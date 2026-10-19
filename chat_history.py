@@ -39,17 +39,20 @@ def initialize_history(database_path=DATABASE_PATH):
                 ON messages(conversation_id, id);
             """
         )
-
-
-def create_conversation(database_path=DATABASE_PATH):
-    conversation_id = str(uuid4())
-    with closing(_connect(database_path)) as connection:
-        with connection:
-            connection.execute(
-                "INSERT INTO conversations (id) VALUES (?)",
-                (conversation_id,),
+        connection.execute(
+            """
+            DELETE FROM conversations
+            WHERE NOT EXISTS (
+                SELECT 1 FROM messages
+                WHERE messages.conversation_id = conversations.id
             )
-    return conversation_id
+            """
+        )
+        connection.commit()
+
+
+def new_conversation_id():
+    return str(uuid4())
 
 
 def conversation_exists(conversation_id, database_path=DATABASE_PATH):
@@ -101,6 +104,10 @@ def save_message(conversation_id, role, content, sources=None, database_path=DAT
     title = " ".join(content.split())[:48]
     with closing(_connect(database_path)) as connection:
         with connection:
+            connection.execute(
+                "INSERT INTO conversations (id) VALUES (?) ON CONFLICT(id) DO NOTHING",
+                (conversation_id,),
+            )
             connection.execute(
                 """
                 INSERT INTO messages (conversation_id, role, content, sources_json)
