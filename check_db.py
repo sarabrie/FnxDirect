@@ -1,8 +1,14 @@
 import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 # 1. טעינת מסד הנתונים הקיים
 chroma_client = chromadb.PersistentClient(path="./fnx_db")
-collection = chroma_client.get_collection(name="fnx_website_chunks")
+collection = chroma_client.get_collection(
+    name="fnx_website_chunks_multilingual",
+    embedding_function=SentenceTransformerEmbeddingFunction(
+        model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    ),
+)
 
 # 2. בדיקת מספר הנתונים הכולל שנשמרו
 count = collection.count()

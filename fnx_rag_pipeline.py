@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from firecrawl import FirecrawlApp
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 load_dotenv()
 
@@ -19,18 +20,24 @@ app = FirecrawlApp(api_key=FIRE_CRAWL_API_KEY)
 
 # אתחול מסד הנתונים הווקטורי ChromaDB (יישמר בתיקייה מקומית בשם fnx_db)
 chroma_client = chromadb.PersistentClient(path="./fnx_db")
-collection = chroma_client.get_or_create_collection(name="fnx_website_chunks")
+collection = chroma_client.get_or_create_collection(
+    name="fnx_website_chunks_multilingual",
+    embedding_function=SentenceTransformerEmbeddingFunction(
+        model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    ),
+)
 
 # רשימת כתובות הליבה הציבוריות באתר הפניקס
 target_urls = [
     "https://www.fnx.co.il/",
-    "https://www.fnx.co.il/claims",
-    "https://www.fnx.co.il/insurance/home",
-    "https://www.fnx.co.il/insurance/car",
-    "https://www.fnx.co.il/insurance/travel"
+    "https://www.fnx.co.il/customer-service/",
+    "https://www.fnx.co.il/claims-customer-service/",
+    "https://www.fnx.co.il/apartment-insurance/",
+    "https://www.fnx.co.il/car-insurance/",
+    "https://www.fnx.co.il/travel-insurance/"
 ]
 
-all_chunks = []
+successful_pages = {}
 
 print("\n2. מתחיל בסריקת עמודי המפתח של הפניקס...")
 
@@ -48,8 +55,7 @@ for url in target_urls:
             metadata = getattr(scrape_result, 'metadata', {})
             
         title = metadata.get('title', 'הפניקס') if isinstance(metadata, dict) else getattr(metadata, 'title', 'הפניקס')
-        source_url = metadata.get('sourceURL') or metadata.get('url') or url if isinstance(metadata, dict) else url
-        
+
         if markdown_content:
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=600,
@@ -58,16 +64,11 @@ for url in target_urls:
             )
             
             chunks = text_splitter.split_text(markdown_content)
-            
-            for i, chunk in enumerate(chunks):
-                all_chunks.append({
-                    "text": chunk,
-                    "metadata": {
-                        "url": str(source_url),
-                        "title": str(title),
-                        "chunk_id": f"{source_url}#chunk_{i}"
-                    }
-                })
+
+            successful_pages[url] = {
+                "title": str(title),
+                "chunks": chunks,
+            }
             print(f"-> נסרק בהצלחה ונוצרו {len(chunks)} קטעים עבור: {url}")
         else:
             print(f"-> העמוד {url} חזר ריק או ללא תוכן markdown.")
@@ -75,27 +76,30 @@ for url in target_urls:
     except Exception as e:
         print(f"שגיאה בסריקת העמוד {url}: {e}")
 
-print(f"\nסך הכל נוצרו {len(all_chunks)} קטעים. מתחיל בשמירה במסד הווקטורי...")
+total_chunks = sum(len(page["chunks"]) for page in successful_pages.values())
+print(f"\nסך הכל נוצרו {total_chunks} קטעים. מתחיל בעדכון מסד הנתונים הווקטורי...")
 
-# 3. הכנסת ה-Chunks לתוך ChromaDB
-if all_chunks:
-    documents = []
-    metadatas = []
-    ids = []
+# 3. עדכון כל עמוד שנסרק בהצלחה וניקוי הקטעים הישנים שנותרו ממנו
+if successful_pages:
+    for url, page in successful_pages.items():
+        documents = [str(chunk) for chunk in page["chunks"]]
+        metadatas = [
+            {"url": url, "title": page["title"]}
+            for _ in documents
+        ]
+        ids = [f"{url}#chunk_{i}" for i in range(len(documents))]
 
-    for item in all_chunks:
-        documents.append(str(item["text"]))
-        metadatas.append({
-            "url": str(item["metadata"]["url"]),
-            "title": str(item["metadata"]["title"])
-        })
-        ids.append(str(item["metadata"]["chunk_id"]))
+        existing = collection.get(where={"url": url}, include=["metadatas"])
+        stale_ids = [chunk_id for chunk_id in existing["ids"] if chunk_id not in ids]
 
-    collection.add(
-        documents=documents,
-        metadatas=metadatas,
-        ids=ids
-    )
-    print(f"\n3. הצלחה! כל {len(documents)} הקטעים נשמרו ונאנדקסו ב-ChromaDB בהצלחה.")
+        collection.upsert(
+            documents=documents,
+            metadatas=metadatas,
+            ids=ids
+        )
+        if stale_ids:
+            collection.delete(ids=stale_ids)
+
+    print(f"\n3. הצלחה! {total_chunks} קטעים מ-{len(successful_pages)} עמודים עודכנו ב-ChromaDB.")
 else:
-    print("לא נמצאו קטעים לשמירה. בדקי את מפתח ה-API או את כתובות האתר.")
+    print("לא נמצאו עמודים לסריקה. מסד הנתונים הקיים לא שונה.")
