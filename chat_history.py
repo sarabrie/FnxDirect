@@ -99,9 +99,16 @@ def load_messages(conversation_id, database_path=DATABASE_PATH):
     ]
 
 
-def save_message(conversation_id, role, content, sources=None, database_path=DATABASE_PATH):
+def save_message(
+    conversation_id,
+    role,
+    content,
+    sources=None,
+    database_path=DATABASE_PATH,
+    conversation_title=None,
+):
     sources_json = json.dumps(sources or [], ensure_ascii=False)
-    title = " ".join(content.split())[:48]
+    title = " ".join((conversation_title or content).split())[:48]
     with closing(_connect(database_path)) as connection:
         with connection:
             connection.execute(

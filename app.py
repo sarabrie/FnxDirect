@@ -1,3 +1,4 @@
+import importlib
 import os
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
@@ -6,6 +7,10 @@ import chromadb
 from google import genai
 import streamlit as st
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+import chat_history
+
+importlib.reload(chat_history)
+
 from chat_history import (
     conversation_exists,
     initialize_history,
@@ -105,6 +110,27 @@ def generate_rag_response(question, collection):
     return answer, sources
 
 
+def generate_conversation_title(question):
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_api_key:
+        raise RuntimeError("חסר GEMINI_API_KEY בקובץ .env.")
+
+    client = genai.Client(api_key=gemini_api_key)
+    response = client.models.generate_content(
+        model='gemini-3.8-flash',
+        contents=(
+            "צור כותרת קצרה ומסכמת לשיחה על סמך השאלה הראשונה בלבד. "
+            "כתוב בעברית, עד 6 מילים, והחזר את הכותרת בלבד ללא מרכאות או הסבר.\n\n"
+            f"שאלה: {question}"
+        ),
+    )
+
+    title = " ".join((response.text or "").split()).strip(" \"'״׳")
+    if not title:
+        raise RuntimeError("מודל Gemini לא החזיר כותרת לשיחה.")
+    return title[:48]
+
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');
@@ -182,6 +208,9 @@ except Exception:
     st.error("לא הצלחתי להתחבר למסד המידע. ודאו שתיקיית fnx_db קיימת ונסו להפעיל מחדש.")
     st.stop()
 
+if st.session_state.pop("title_generation_warning", False):
+    st.warning("לא הצלחתי ליצור כותרת מסכמת; השאלה הראשונה תשמש ככותרת.")
+
 if not st.session_state.messages:
     st.markdown("**אפשר להתחיל מכאן**")
     suggestions = [
@@ -208,8 +237,21 @@ typed_question = st.chat_input("כתבו את השאלה שלכם...")
 question = typed_question or selected_question
 
 if question:
+    conversation_title = None
+    if not st.session_state.messages:
+        try:
+            conversation_title = generate_conversation_title(question)
+        except Exception as error:
+            print(f"שגיאה ביצירת כותרת לשיחה: {type(error).__name__}: {error}")
+            st.session_state.title_generation_warning = True
+
     st.session_state.messages.append({"role": "user", "content": question})
-    save_message(conversation_id, "user", question)
+    save_message(
+        conversation_id,
+        "user",
+        question,
+        conversation_title=conversation_title,
+    )
     with st.chat_message("user"):
         st.markdown(question)
 
