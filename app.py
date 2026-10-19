@@ -5,6 +5,15 @@ from dotenv import load_dotenv
 import chromadb
 from google import genai
 import streamlit as st
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chat_history import (
+    conversation_exists,
+    create_conversation,
+    initialize_history,
+    list_conversations,
+    load_messages,
+    save_message,
+)
 
 load_dotenv()
 
@@ -14,17 +23,38 @@ st.set_page_config(
     layout="centered",
 )
 
+initialize_history()
+
+requested_conversation_id = st.query_params.get("conversation")
+if (
+    requested_conversation_id
+    and conversation_exists(requested_conversation_id)
+):
+    conversation_id = requested_conversation_id
+else:
+    conversation_id = create_conversation()
+    st.query_params["conversation"] = conversation_id
+
+if st.session_state.get("conversation_id") != conversation_id:
+    st.session_state.conversation_id = conversation_id
+    st.session_state.messages = load_messages(conversation_id)
+
 
 @st.cache_resource
 def get_collection():
     chroma_client = chromadb.PersistentClient(path="./fnx_db")
-    return chroma_client.get_collection(name="fnx_website_chunks")
+    return chroma_client.get_collection(
+        name="fnx_website_chunks_multilingual",
+        embedding_function=SentenceTransformerEmbeddingFunction(
+            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        ),
+    )
 
 
 def generate_rag_response(question, collection):
     results = collection.query(
         query_texts=[question],
-        n_results=3
+        n_results=5
     )
 
     documents = results.get('documents', [[]])[0]
@@ -43,10 +73,12 @@ def generate_rag_response(question, collection):
 
     prompt = f"""
 אתה עוזר וירטואלי של חברת הפניקס.
-ענה על השאלה הבאה **אך ורק** על סמך המידע המצורף בהקשר להלן.
-אם המידע אינו מופיע במפורש בהקשר, ענה בדיוק: "זה לא כתוב באתר הפניקס."
-אל תמציא מידע מחוץ להקשר המסופק.
-ענה בעברית ובצורה ברורה. המקורות יוצגו בנפרד מהתשובה.
+    ענה בעברית ובצורה ברורה, ורק על סמך הקטעים המצורפים.
+    חפש מידע רלוונטי בכל הקטעים, כולל כותרות, רשימות וניסוחים שקולים לשאלה.
+    אם קטע עונה על חלק מהשאלה, מסור את המידע הנתמך וציין אילו פרטים אינם מופיעים.
+    אל תוסיף עובדות שאינן מופיעות בקטעים. אם אף קטע אינו מכיל מידע רלוונטי, ענה בדיוק: "זה לא כתוב באתר הפניקס."
+    דוגמה: אם הקטע אומר "מעקב פשוט ונוח אחר ההשקעה שלך" והשאלה היא מה האפליקציה מאפשרת, ענה: "האפליקציה מאפשרת מעקב פשוט ונוח אחר ההשקעה שלך."
+    המקורות יוצגו בנפרד מהתשובה.
 
 הקשר מתוך האתר:
 {context_text}
@@ -122,8 +154,21 @@ with st.sidebar:
     st.markdown("### הפניקס")
     st.caption("עוזר מידע אישי")
     if st.button("שיחה חדשה", use_container_width=True):
+        conversation_id = create_conversation()
+        st.session_state.conversation_id = conversation_id
         st.session_state.messages = []
+        st.query_params["conversation"] = conversation_id
         st.rerun()
+    st.divider()
+    st.markdown("**היסטוריית שיחות**")
+    for conversation in list_conversations():
+        if st.button(
+            conversation["title"],
+            key=f"history_{conversation['id']}",
+            use_container_width=True,
+        ):
+            st.query_params["conversation"] = conversation["id"]
+            st.rerun()
     st.divider()
     st.markdown("**נושאים שאפשר לשאול עליהם**")
     st.caption("תביעות · ביטוח רכב · ביטוח דירה · ביטוח נסיעות")
@@ -133,9 +178,6 @@ try:
 except Exception:
     st.error("לא הצלחתי להתחבר למסד המידע. ודאו שתיקיית fnx_db קיימת ונסו להפעיל מחדש.")
     st.stop()
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
 if not st.session_state.messages:
     st.markdown("**אפשר להתחיל מכאן**")
@@ -164,6 +206,7 @@ question = typed_question or selected_question
 
 if question:
     st.session_state.messages.append({"role": "user", "content": question})
+    save_message(conversation_id, "user", question)
     with st.chat_message("user"):
         st.markdown(question)
 
@@ -173,7 +216,8 @@ if question:
                 answer, sources = generate_rag_response(question, collection)
             except RuntimeError as error:
                 answer, sources = str(error), []
-            except Exception:
+            except Exception as error:
+                print(f"שגיאה ביצירת תשובה: {type(error).__name__}: {error}")
                 answer = "לא הצלחתי לקבל תשובה כרגע. בדקו את החיבור ונסו שוב."
                 sources = []
         st.markdown(answer)
@@ -187,3 +231,5 @@ if question:
         "content": answer,
         "sources": sources,
     })
+    save_message(conversation_id, "assistant", answer, sources)
+    st.rerun()

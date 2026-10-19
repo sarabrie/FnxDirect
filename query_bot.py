@@ -2,11 +2,17 @@ import os
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
 import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 # 1. טעינת מסד הנתונים הקיים
 print("טוען את מסד הנתונים הווקטורי...")
 chroma_client = chromadb.PersistentClient(path="./fnx_db")
-collection = chroma_client.get_collection(name="fnx_website_chunks")
+collection = chroma_client.get_collection(
+    name="fnx_website_chunks_multilingual",
+    embedding_function=SentenceTransformerEmbeddingFunction(
+        model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    ),
+)
 
 def ask_phoenix_bot(question):
     """
@@ -14,10 +20,10 @@ def ask_phoenix_bot(question):
     ומציגה את התשובה יחד עם קישור למקור (URL).
     """
     print(f"\n--- מחפש תשובה לשאלה: '{question}' ---")    
-    # חיפוש 3 הקטעים הקרובים ביותר לשאלה במסד הנתונים הווקטורי
+    # חיפוש 5 הקטעים הקרובים ביותר לשאלה במסד הנתונים הווקטורי
     results = collection.query(
         query_texts=[question],
-        n_results=3
+        n_results=5
     )
     
     documents = results.get('documents', [[]])[0]
