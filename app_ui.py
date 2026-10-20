@@ -147,6 +147,18 @@ _CSS = """
     white-space: nowrap;
 }
 .followup-chip:hover { background: #d5ede6; border-color: var(--green); }
+
+.copy-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 11px; font-size: 12px; font-weight: 600;
+    color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 8px;
+    cursor: pointer; font-family: 'Heebo', sans-serif;
+    transition: all 0.15s ease; user-select: none;
+    margin-top: 10px;
+}
+.copy-btn:hover { color: var(--green); border-color: var(--green); background: var(--green-light); }
+.copy-btn.copied { color: var(--green); border-color: var(--green); background: var(--green-light); }
 </style>
 """
 
@@ -251,11 +263,60 @@ def render_followup_chips(questions):
     return clicked
 
 
+def _sanitize_for_copy(text):
+    """Strip Markdown formatting for clean plain-text clipboard content."""
+    # Remove code fences
+    text = re.sub(r"```[\s\S]*?```", lambda m: re.sub(r"```\w*", "", m.group()).strip(), text)
+    # Remove inline code
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # Remove bold/italic
+    text = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,3}([^_]+)_{1,3}", r"\1", text)
+    # Remove markdown links, keep label
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # Remove headings markers
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Remove HTML tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Collapse excess blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def render_copy_button(content, message_id):
+    """Render a self-contained JS copy button — no st.rerun, isolated per message."""
+    clean = _sanitize_for_copy(content)
+    # Escape for safe JS string literal
+    escaped = clean.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    uid = f"copy_{message_id}"
+    html_snippet = f"""
+<button id="{uid}" class="copy-btn"
+        title="העתק תוכן ללוח"
+        aria-label="העתק תוכן ללוח"
+        onclick="(function(){{
+            var btn = document.getElementById('{uid}');
+            navigator.clipboard.writeText(`{escaped}`).then(function(){{
+                btn.textContent = '✓ הועתק!';
+                btn.classList.add('copied');
+                setTimeout(function(){{ btn.textContent = '⎘ העתק תשובה'; btn.classList.remove('copied'); }}, 2000);
+            }}).catch(function(){{
+                btn.textContent = '⚠ לא זמין';
+                setTimeout(function(){{ btn.textContent = '⎘ העתק תשובה'; }}, 2000);
+            }});
+        }})()">
+  ⎘ העתק תשובה
+</button>
+"""
+    st.markdown(html_snippet, unsafe_allow_html=True)
+
+
+def render_messages(messages, on_feedback=None):
     for idx, message in enumerate(messages):
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
                 st.markdown(message["content"])
                 render_sources(message.get("sources"))
+                render_copy_button(message["content"], message.get("message_id") or idx)
                 if on_feedback and message.get("message_id"):
                     render_feedback_buttons(message["message_id"], idx)
             else:
