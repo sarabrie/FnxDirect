@@ -35,6 +35,19 @@ if st.query_params.get("admin") == "1":
     admin_ui.render_admin_panel()
     st.stop()
 
+# ─── Google OAuth callback ───────────────────────────────────────────────────
+if "code" in st.query_params and "state" not in st.query_params:
+    from auth_db import login_or_register_google
+    _code = st.query_params["code"]
+    st.query_params.clear()
+    _result = login_or_register_google(_code)
+    if isinstance(_result, str):
+        st.error(_result)
+    else:
+        auth_ui._save_session(*_result)
+        st.session_state.pop("show_auth", None)
+        st.rerun()
+
 # ─── Landing page ─────────────────────────────────────────────────────────────
 if not st.session_state.get("landing_done"):
     # If already authenticated from a previous session, skip landing

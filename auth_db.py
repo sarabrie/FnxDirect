@@ -230,8 +230,93 @@ def get_user_by_id(user_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def get_bot_preferences(user_id: str) -> dict:
+# ─── Google OAuth ──────────────────────────────────────────────────────────────
+
+def build_google_auth_url() -> str | None:
+    client_id = os.getenv("GOOGLE_CLIENT_ID")
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8501")
+    if not client_id:
+        return None
+    from urllib.parse import urlencode
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "select_account",
+    }
+    return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+
+
+def login_or_register_google(code: str) -> tuple[str, str] | str:
+    """Exchange OAuth code for tokens, upsert user, return (access, refresh) or error string."""
+    import requests as _requests
+    client_id = os.getenv("GOOGLE_CLIENT_ID")
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8501")
+    if not client_id or not client_secret:
+        return "חסרות הגדרות Google OAuth בקובץ .env."
+
+    # Exchange code for tokens
+    token_resp = _requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        },
+        timeout=10,
+    )
+    token_data = token_resp.json()
+    if "error" in token_data:
+        return f"שגיאת Google: {token_data.get('error_description', token_data['error'])}"
+
+    # Get user info
+    userinfo_resp = _requests.get(
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+        headers={"Authorization": f"Bearer {token_data['access_token']}"},
+        timeout=10,
+    )
+    info = userinfo_resp.json()
+    google_sub = info.get("sub")
+    email = info.get("email", "").lower().strip()
+    display_name = info.get("name") or email.split("@")[0]
+
+    if not google_sub or not email:
+        return "לא ניתן לקבל פרטי משתמש מ -Google."
+
     with closing(_connect()) as conn:
+        # Find by provider_id first, then by email
+        row = conn.execute(
+            "SELECT id FROM users WHERE provider_id=? AND auth_provider='google'", (google_sub,)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT id FROM users WHERE email=? COLLATE NOCASE", (email,)
+            ).fetchone()
+        if row:
+            uid = row["id"]
+            with conn:
+                conn.execute(
+                    "UPDATE users SET provider_id=?, auth_provider='google', display_name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (google_sub, display_name, uid),
+                )
+        else:
+            uid = str(uuid4())
+            with conn:
+                conn.execute(
+                    "INSERT INTO users (id, email, auth_provider, provider_id, display_name) VALUES (?,?,?,?,?)",
+                    (uid, email, "google", google_sub, display_name),
+                )
+                conn.execute("INSERT INTO user_preferences (user_id) VALUES (?)", (uid,))
+
+    return _create_session(uid)
+
+
+def get_bot_preferences(user_id: str) -> dict:    with closing(_connect()) as conn:
         row = conn.execute(
             "SELECT preferred_name, response_length, tone FROM user_preferences WHERE user_id=?",
             (user_id,),
