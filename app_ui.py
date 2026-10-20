@@ -132,6 +132,21 @@ _CSS = """
     max-width: 480px;
 }
 .fb-card-title { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 10px; }
+
+.followup-chips {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-top: 14px; direction: rtl;
+}
+.followup-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 14px; font-size: 13px; font-weight: 600;
+    color: var(--green); background: var(--green-light);
+    border: 1px solid #c5e0d8; border-radius: 999px;
+    cursor: pointer; font-family: 'Heebo', sans-serif;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    white-space: nowrap;
+}
+.followup-chip:hover { background: #d5ede6; border-color: var(--green); }
 </style>
 """
 
@@ -222,7 +237,20 @@ def render_suggestions():
     return selected_question
 
 
-def render_messages(messages, on_feedback=None):
+def render_followup_chips(questions):
+    """Render 2-3 follow-up suggestion chips. Returns the clicked question or None."""
+    if not questions:
+        return None
+    st.markdown('<div class="followup-chips">', unsafe_allow_html=True)
+    cols = st.columns(len(questions))
+    clicked = None
+    for col, q in zip(cols, questions):
+        if col.button(f"↩ {q}", key=f"followup_{hash(q)}", use_container_width=True):
+            clicked = q
+    st.markdown('</div>', unsafe_allow_html=True)
+    return clicked
+
+
     for idx, message in enumerate(messages):
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
