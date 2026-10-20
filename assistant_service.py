@@ -73,15 +73,6 @@ def _get_gemini_client():
     return genai.Client(api_key=gemini_api_key)
 
 
-def _response_text_chunks(response_stream, client):
-    try:
-        for chunk in response_stream:
-            text = chunk.text
-            if text:
-                yield text
-    finally:
-        client.close()
-
 
 def generate_rag_response(question, collection):
     result_count = min(10, collection.count())
@@ -135,23 +126,28 @@ def generate_rag_response(question, collection):
 שאלה: {question}
 """
 
-    client = _get_gemini_client()
-    try:
-        response_stream = client.models.generate_content_stream(
-            model="gemini-3.8-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=512,
-                thinking_config=types.ThinkingConfig(
-                    thinking_level=types.ThinkingLevel.LOW,
-                ),
-            ),
-        )
-    except Exception:
-        client.close()
-        raise
+    config = types.GenerateContentConfig(
+        max_output_tokens=512,
+        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+    )
 
-    return _response_text_chunks(response_stream, client), sources
+    last_error = None
+    for attempt in range(3):
+        client = _get_gemini_client()
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.8-flash", contents=prompt, config=config
+            )
+            client.close()
+            return response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע.", sources
+        except Exception as e:
+            client.close()
+            last_error = e
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                time.sleep(3)
+                continue
+            raise
+    raise last_error
 
 
 def generate_conversation_title(question):
