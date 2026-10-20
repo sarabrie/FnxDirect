@@ -132,6 +132,33 @@ _CSS = """
     max-width: 480px;
 }
 .fb-card-title { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 10px; }
+
+.followup-chips {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-top: 14px; direction: rtl;
+}
+.followup-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 14px; font-size: 13px; font-weight: 600;
+    color: var(--green); background: var(--green-light);
+    border: 1px solid #c5e0d8; border-radius: 999px;
+    cursor: pointer; font-family: 'Heebo', sans-serif;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    white-space: nowrap;
+}
+.followup-chip:hover { background: #d5ede6; border-color: var(--green); }
+
+.copy-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 11px; font-size: 12px; font-weight: 600;
+    color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 8px;
+    cursor: pointer; font-family: 'Heebo', sans-serif;
+    transition: all 0.15s ease; user-select: none;
+    margin-top: 10px;
+}
+.copy-btn:hover { color: var(--green); border-color: var(--green); background: var(--green-light); }
+.copy-btn.copied { color: var(--green); border-color: var(--green); background: var(--green-light); }
 </style>
 """
 
@@ -222,12 +249,75 @@ def render_suggestions():
     return selected_question
 
 
+def render_followup_chips(questions):
+    """Render 2-3 follow-up suggestion chips. Returns the clicked question or None."""
+    if not questions:
+        return None
+    st.markdown('<div class="followup-chips">', unsafe_allow_html=True)
+    cols = st.columns(len(questions))
+    clicked = None
+    for col, q in zip(cols, questions):
+        if col.button(f"↩ {q}", key=f"followup_{hash(q)}", use_container_width=True):
+            clicked = q
+    st.markdown('</div>', unsafe_allow_html=True)
+    return clicked
+
+
+def _sanitize_for_copy(text):
+    """Strip Markdown formatting for clean plain-text clipboard content."""
+    # Remove code fences
+    text = re.sub(r"```[\s\S]*?```", lambda m: re.sub(r"```\w*", "", m.group()).strip(), text)
+    # Remove inline code
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # Remove bold/italic
+    text = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,3}([^_]+)_{1,3}", r"\1", text)
+    # Remove markdown links, keep label
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # Remove headings markers
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Remove HTML tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Collapse excess blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def render_copy_button(content, message_id):
+    """Render a self-contained JS copy button — no st.rerun, isolated per message."""
+    clean = _sanitize_for_copy(content)
+    # Store text in data-attribute (html.escape handles all quotes/special chars safely)
+    data_text = html.escape(clean, quote=True)
+    uid = f"copy_{message_id}"
+    html_snippet = f"""
+<button id="{uid}" class="copy-btn"
+        title="העתק תוכן ללוח"
+        aria-label="העתק תוכן ללוח"
+        data-copy="{data_text}"
+        onclick="(function(){{
+            var btn = document.getElementById('{uid}');
+            navigator.clipboard.writeText(btn.dataset.copy).then(function(){{
+                btn.textContent = '✓ הועתק!';
+                btn.classList.add('copied');
+                setTimeout(function(){{ btn.textContent = '⎘ העתק תשובה'; btn.classList.remove('copied'); }}, 2000);
+            }}).catch(function(){{
+                btn.textContent = '⚠ לא זמין';
+                setTimeout(function(){{ btn.textContent = '⎘ העתק תשובה'; }}, 2000);
+            }});
+        }})()">
+  ⎘ העתק תשובה
+</button>
+"""
+    st.markdown(html_snippet, unsafe_allow_html=True)
+
+
 def render_messages(messages, on_feedback=None):
     for idx, message in enumerate(messages):
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
                 st.markdown(message["content"])
                 render_sources(message.get("sources"))
+                render_copy_button(message["content"], message.get("message_id") or idx)
                 if on_feedback and message.get("message_id"):
                     render_feedback_buttons(message["message_id"], idx)
             else:

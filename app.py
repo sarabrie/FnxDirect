@@ -164,11 +164,17 @@ if not st.session_state.messages:
 else:
     selected_question = None
     app_ui.render_messages(st.session_state.messages, on_feedback=_on_feedback)
+    # Render follow-up chips after the last assistant message
+    followup_questions = st.session_state.get("followup_questions", [])
+    if followup_questions:
+        with st.chat_message("assistant"):
+            selected_question = app_ui.render_followup_chips(followup_questions)
 
 typed_question = st.chat_input("כתבו את השאלה שלכם...")
 question = typed_question or selected_question
 
 if question:
+    st.session_state["followup_questions"] = []  # clear chips on new question
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
@@ -178,7 +184,7 @@ if question:
     with st.chat_message("assistant"):
         with st.spinner("מחפש מידע באתר הפניקס..."):
             try:
-                response, sources, chunk_ids, prompt_text = generate_rag_response(
+                response, sources, chunk_ids, prompt_text, suggested_questions = generate_rag_response(
                     question, collection, user_prefs=user_prefs
                 )
                 if isinstance(response, str):
@@ -192,8 +198,9 @@ if question:
                 if "זה לא כתוב באתר" in answer:
                     sources = []
                     chunk_ids = []
+                    suggested_questions = []
             except RuntimeError as error:
-                answer, sources, chunk_ids, prompt_text = str(error), [], [], ""
+                answer, sources, chunk_ids, prompt_text, suggested_questions = str(error), [], [], "", []
                 st.markdown(answer)
             except Exception as error:
                 print(f"שגיאה ביצירת תשובה: {type(error).__name__}: {error}")
@@ -201,7 +208,7 @@ if question:
                     answer = "מכסת השימוש ב-Gemini הסתיימה. נסו שוב לאחר איפוס המכסה."
                 else:
                     answer = f"שגיאה: {type(error).__name__}: {error}"
-                sources, chunk_ids, prompt_text = [], [], ""
+                sources, chunk_ids, prompt_text, suggested_questions = [], [], "", []
                 st.markdown(answer)
             app_ui.render_sources(sources)
 
@@ -215,4 +222,5 @@ if question:
         "sources": sources,
         "message_id": message_id,
     })
+    st.session_state["followup_questions"] = suggested_questions
     st.rerun()

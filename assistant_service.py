@@ -1,3 +1,4 @@
+import json
 import os
 import ssl
 from pathlib import Path
@@ -169,6 +170,9 @@ def generate_rag_response(question, collection, user_prefs=None):
 אל תוסיף עובדות שאינן מופיעות בקטעים. אם אף קטע אינו מכיל מידע רלוונטי, ענה בדיוק: "זה לא כתוב באתר הפניקס."
 המקורות יוצגו בנפרד מהתשובה.
 
+החזר תשובה בפורמט JSON בלבד (ללא markdown, ללא ```json), לפי המבנה הבא:
+{{"answer": "<התשובה המלאה בעברית>", "suggested_questions": ["<שאלת המשך 1, עד 8 מילים>", "<שאלת המשך 2, עד 8 מילים>", "<שאלת המשך 3, עד 8 מילים>"]}}
+
 הקשר מתוך האתר:
 {context_text}
 
@@ -176,7 +180,7 @@ def generate_rag_response(question, collection, user_prefs=None):
 """
 
     config = types.GenerateContentConfig(
-        max_output_tokens=512,
+        max_output_tokens=700,
         thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
     )
 
@@ -188,8 +192,20 @@ def generate_rag_response(question, collection, user_prefs=None):
                 model="gemini-3.8-flash", contents=prompt, config=config
             )
             client.close()
-            answer = response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
-            return answer, sources, chunk_ids, prompt
+            raw = (response.text or "").strip()
+            # Strip optional markdown code fences
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            try:
+                parsed = json.loads(raw)
+                answer = parsed.get("answer") or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
+                suggested_questions = [
+                    q for q in parsed.get("suggested_questions", []) if isinstance(q, str) and q.strip()
+                ][:3]
+            except (json.JSONDecodeError, AttributeError):
+                answer = raw or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
+                suggested_questions = []
+            return answer, sources, chunk_ids, prompt, suggested_questions
         except Exception as e:
             client.close()
             last_error = e
