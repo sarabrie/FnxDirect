@@ -12,13 +12,8 @@ DISLIKE_REASONS = [
     "הטון או אופן הפנייה לא היו נעימים",
 ]
 
-
-def render_header(user=None):
-    greeting_html = ""
-    if user:
-        name = html.escape(user.get("name", "משתמש"))
-        greeting_html = f'<div style="font-size:13px;color:#087e70;font-weight:700;margin-bottom:6px">שלום, {name} 👋</div>'
-    st.markdown(f"""{greeting_html}""" + """
+# Plain string — no f-string, so CSS braces are safe
+_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');
 
@@ -84,109 +79,63 @@ def render_header(user=None):
     background: #f0f7f4;
 }
 
-/* מקורות - popup קומפקטי */
 .src-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 14px;
-    padding: 6px 13px;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--green);
-    background: var(--green-light);
-    border: 1px solid #c5e0d8;
-    border-radius: 999px;
-    cursor: pointer;
-    list-style: none;
-    user-select: none;
-    transition: background 0.15s ease;
-    font-family: 'Heebo', sans-serif;
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-top: 14px; padding: 6px 13px;
+    font-size: 12px; font-weight: 700;
+    color: var(--green); background: var(--green-light);
+    border: 1px solid #c5e0d8; border-radius: 999px;
+    cursor: pointer; list-style: none; user-select: none;
+    transition: background 0.15s ease; font-family: 'Heebo', sans-serif;
 }
 .src-toggle::-webkit-details-marker { display: none; }
 .src-toggle:hover { background: #d5ede6; }
 
 .src-popup {
-    margin-top: 8px;
-    padding: 12px 14px;
-    background: #ffffff;
-    border: 1px solid #daeae3;
-    border-radius: 14px;
-    box-shadow: 0 6px 24px rgba(8,80,60,0.10);
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    direction: rtl;
-    font-family: 'Heebo', sans-serif;
-    max-width: 420px;
+    margin-top: 8px; padding: 12px 14px;
+    background: #ffffff; border: 1px solid #daeae3;
+    border-radius: 14px; box-shadow: 0 6px 24px rgba(8,80,60,0.10);
+    display: flex; flex-direction: column; gap: 7px;
+    direction: rtl; font-family: 'Heebo', sans-serif; max-width: 420px;
 }
 
-.src-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-}
+.src-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 
 .src-num {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 6px;
-    background: var(--green-light);
-    color: var(--green);
-    font-size: 11px;
-    font-weight: 700;
-    flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 6px;
+    background: var(--green-light); color: var(--green);
+    font-size: 11px; font-weight: 700; flex-shrink: 0;
 }
 
 .src-link {
-    color: var(--ink) !important;
-    font-weight: 600;
-    text-decoration: none !important;
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    color: var(--ink) !important; font-weight: 600;
+    text-decoration: none !important; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     transition: color 0.15s ease;
 }
 .src-link:hover { color: var(--green) !important; }
+.src-arrow { font-size: 11px; color: var(--green); flex-shrink: 0; }
 
-.src-arrow {
-    font-size: 11px;
-    color: var(--green);
-    flex-shrink: 0;
-}
-
-/* ── Feedback ── */
-.fb-row { display:flex; gap:6px; margin-top:10px; align-items:center; direction:rtl; }
-.fb-btn {
-    background:none; border:1px solid var(--line); border-radius:8px;
-    padding:4px 10px; font-size:15px; cursor:pointer;
-    transition:background 0.15s, border-color 0.15s;
-    font-family:'Heebo',sans-serif;
-}
-.fb-btn:hover { background:var(--green-light); border-color:var(--green); }
-.fb-btn.active { background:var(--green-light); border-color:var(--green); }
-.fb-btn:disabled { opacity:0.45; cursor:default; }
 .fb-toast {
-    font-size:12px; color:var(--green); font-weight:700;
-    padding:4px 10px; background:var(--green-light);
-    border-radius:8px; border:1px solid #c5e0d8;
-    font-family:'Heebo',sans-serif;
+    font-size: 12px; color: var(--green); font-weight: 700;
+    padding: 4px 10px; background: var(--green-light);
+    border-radius: 8px; border: 1px solid #c5e0d8;
+    font-family: 'Heebo', sans-serif; display: inline-block; margin-top: 8px;
 }
 .fb-card {
-    margin-top:10px; padding:14px 16px;
-    background:#fff; border:1px solid #daeae3;
-    border-radius:14px; direction:rtl;
-    font-family:'Heebo',sans-serif;
-    box-shadow:0 4px 16px rgba(8,80,60,0.08);
-    max-width:480px;
+    margin-top: 10px; padding: 14px 16px;
+    background: #fff; border: 1px solid #daeae3;
+    border-radius: 14px; direction: rtl;
+    font-family: 'Heebo', sans-serif;
+    box-shadow: 0 4px 16px rgba(8,80,60,0.08);
+    max-width: 480px;
 }
-.fb-card-title { font-size:14px; font-weight:700; color:var(--ink); margin-bottom:10px; }
+.fb-card-title { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 10px; }
 </style>
+"""
+
+_HEADER_HTML = """
 <div style="display:flex;align-items:center;gap:13px;margin-bottom:22px">
   <div class="brand-mark">✳</div>
   <div><div class="eyebrow">FNX DIRECT</div><div style="font-size:17px;font-weight:700">העוזר של הפניקס</div></div>
@@ -195,7 +144,16 @@ def render_header(user=None):
 <h1 class="intro-title">איך אפשר לעזור?</h1>
 <div class="intro-copy">שאלו על ביטוח, תביעות ושירות. התשובות מבוססות על המידע באתר הפניקס.</div>
 <div class="trust-line">✳ &nbsp; תשובות מבוססות מקור &nbsp; · &nbsp; קישורים מאומתים לעמודי הפניקס</div>
-""", unsafe_allow_html=True)
+"""
+
+
+def render_header(user=None):
+    st.markdown(_CSS, unsafe_allow_html=True)
+    greeting_html = ""
+    if user:
+        name = html.escape(user.get("name", "משתמש"))
+        greeting_html = f'<div style="font-size:13px;color:#087e70;font-weight:700;margin-bottom:6px">שלום, {name} 👋</div>'
+    st.markdown(greeting_html + _HEADER_HTML, unsafe_allow_html=True)
 
 
 def render_sidebar(conversations, user=None):
@@ -228,7 +186,7 @@ def render_suggestions():
     st.markdown("**אפשר להתחיל מכאן**")
     suggestions = [
         "איך מגישים תביעה על נזקי מים?",
-        "מה כולל ביטוח נסיעות לחו״ל?",
+        'מה כולל ביטוח נסיעות לחו"ל?',
         "איך יוצרים קשר עם הפניקס?",
     ]
     suggestion_columns = st.columns(len(suggestions))
@@ -427,12 +385,12 @@ def render_sources(sources):
 
     count = len(grouped)
     label = f"מקורות ({count})" if count > 1 else "מקור"
-    full_html = f"""
-    <details>
-        <summary class="src-toggle">✳ {label} ▾</summary>
-        <div class="src-popup">{''.join(rows_html)}</div>
-    </details>
-    """
+    full_html = (
+        f'<details>'
+        f'<summary class="src-toggle">✳ {label} ▾</summary>'
+        f'<div class="src-popup">{"".join(rows_html)}</div>'
+        f'</details>'
+    )
     st.markdown(full_html, unsafe_allow_html=True)
 
 
