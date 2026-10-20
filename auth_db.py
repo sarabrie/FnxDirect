@@ -88,6 +88,16 @@ def init_auth_db():
             CREATE INDEX IF NOT EXISTS idx_uh_user_created ON user_history(user_id, created_at DESC);
         """)
         conn.commit()
+        # Migrate existing user_preferences rows — add columns if missing
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(user_preferences)").fetchall()}
+        for col, ddl in [
+            ("preferred_name",  "ALTER TABLE user_preferences ADD COLUMN preferred_name TEXT"),
+            ("response_length", "ALTER TABLE user_preferences ADD COLUMN response_length TEXT NOT NULL DEFAULT 'standard'"),
+            ("tone",            "ALTER TABLE user_preferences ADD COLUMN tone TEXT NOT NULL DEFAULT 'simple'"),
+        ]:
+            if col not in existing_cols:
+                conn.execute(ddl)
+        conn.commit()
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────

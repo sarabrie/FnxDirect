@@ -113,7 +113,7 @@ def load_messages(conversation_id, database_path=DATABASE_PATH):
     with closing(_connect(database_path)) as connection:
         rows = connection.execute(
             """
-            SELECT role, content, sources_json
+            SELECT id, role, content, sources_json
             FROM messages
             WHERE conversation_id = ?
             ORDER BY id
@@ -125,6 +125,7 @@ def load_messages(conversation_id, database_path=DATABASE_PATH):
             "role": row["role"],
             "content": row["content"],
             "sources": json.loads(row["sources_json"]),
+            "message_id": row["id"] if row["role"] == "assistant" else None,
         }
         for row in rows
     ]

@@ -28,6 +28,7 @@ import chromadb
 from google import genai
 from google.genai import types
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chat_history import get_chunk_score
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
@@ -110,6 +111,7 @@ def generate_rag_response(question, collection, user_prefs=None):
     context_text = ""
     sources = []
     chunk_ids = []
+    scored = []
     for document, metadata, chunk_id in zip(documents, metadatas, ids):
         if not isinstance(document, str) or not document.strip():
             continue
@@ -117,13 +119,17 @@ def generate_rag_response(question, collection, user_prefs=None):
             metadata = {}
         if _is_generic_homepage_url(metadata.get("url")):
             continue
+        scored.append((get_chunk_score(chunk_id), chunk_id, document, metadata))
 
+    # Re-rank: penalised chunks sink to the bottom, still included for transparency
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    for _, chunk_id, document, metadata in scored:
         title = metadata.get("title")
         if title:
             context_text += f"- עמוד: {title}\n  קטע: {document}\n"
         else:
             context_text += f"- {document}\n"
-
         sources.append({
             "snippet": document,
             "url": _source_url(metadata),

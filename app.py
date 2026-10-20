@@ -4,6 +4,7 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 from dotenv import load_dotenv
 import streamlit as st
 import app_ui
+import admin_ui
 import auth_ui
 from auth_db import init_auth_db, get_bot_preferences
 from assistant_service import create_collection, generate_rag_response
@@ -27,6 +28,11 @@ st.set_page_config(
 
 init_auth_db()
 initialize_history()
+
+# ─── Admin panel ──────────────────────────────────────────────────────────────
+if st.query_params.get("admin") == "1":
+    admin_ui.render_admin_panel()
+    st.stop()
 
 # ─── Auth state ───────────────────────────────────────────────────────────────
 user = auth_ui.get_current_user()
