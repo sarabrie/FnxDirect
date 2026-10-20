@@ -286,16 +286,17 @@ def _sanitize_for_copy(text):
 def render_copy_button(content, message_id):
     """Render a self-contained JS copy button — no st.rerun, isolated per message."""
     clean = _sanitize_for_copy(content)
-    # Escape for safe JS string literal
-    escaped = clean.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    # Store text in data-attribute (html.escape handles all quotes/special chars safely)
+    data_text = html.escape(clean, quote=True)
     uid = f"copy_{message_id}"
     html_snippet = f"""
 <button id="{uid}" class="copy-btn"
         title="העתק תוכן ללוח"
         aria-label="העתק תוכן ללוח"
+        data-copy="{data_text}"
         onclick="(function(){{
             var btn = document.getElementById('{uid}');
-            navigator.clipboard.writeText(`{escaped}`).then(function(){{
+            navigator.clipboard.writeText(btn.dataset.copy).then(function(){{
                 btn.textContent = '✓ הועתק!';
                 btn.classList.add('copied');
                 setTimeout(function(){{ btn.textContent = '⎘ העתק תשובה'; btn.classList.remove('copied'); }}, 2000);
