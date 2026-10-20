@@ -78,7 +78,7 @@ app_ui.render_header(user)
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 user_id = user["sub"] if user else None
-sidebar_result = app_ui.render_sidebar(list_conversations(user_id=user_id), user)
+sidebar_result = app_ui.render_sidebar(list_conversations(), user)
 sidebar_action, _ = sidebar_result
 
 if sidebar_action:
@@ -160,7 +160,7 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    save_message(conversation_id, "user", question, user_id=user_id)
+    save_message(conversation_id, "user", question)
 
     with st.chat_message("assistant"):
         with st.spinner("מחפש מידע באתר הפניקס..."):
@@ -194,7 +194,7 @@ if question:
 
     message_id = save_message(
         conversation_id, "assistant", answer, sources,
-        chunk_ids=chunk_ids, prompt_text=prompt_text, user_id=user_id,
+        chunk_ids=chunk_ids, prompt_text=prompt_text,
     )
     st.session_state.messages.append({
         "role": "assistant",
