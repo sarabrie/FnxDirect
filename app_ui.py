@@ -160,7 +160,7 @@ def render_sidebar(conversations, user=None):
     with st.sidebar:
         st.markdown("### הפניקס")
         st.caption("עוזר מידע אישי")
-        show_auth = auth_ui.render_sidebar_auth(user)
+        _render_sidebar_user(user)
         st.divider()
         action = None
         if st.button("שיחה חדשה", use_container_width=True):
@@ -179,7 +179,32 @@ def render_sidebar(conversations, user=None):
         st.divider()
         st.markdown("**נושאים שאפשר לשאול עליהם**")
         st.caption("תביעות · ביטוח רכב · ביטוח דירה · ביטוח נסיעות")
-    return action, show_auth
+    return action, False
+
+
+def _render_sidebar_user(user):
+    if user:
+        initial = user.get("name", "?")[0].upper()
+        name = user.get("name", "משתמש")
+        st.markdown(
+            f'<div style="display:inline-flex;align-items:center;gap:8px;background:#e8f5f1;'
+            f'border:1px solid #c5e0d8;border-radius:999px;padding:5px 14px 5px 10px;'
+            f'font-size:13px;font-weight:700;color:#087e70;font-family:Heebo,sans-serif">'
+            f'<span style="width:26px;height:26px;border-radius:50%;background:#087e70;color:white;'
+            f'display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:800">{initial}</span>'
+            f'{name}</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(user.get("email", ""))
+        if st.button("התנתקות", use_container_width=True):
+            auth_ui.logout()
+            st.session_state.pop("landing_done", None)
+            st.rerun()
+    else:
+        st.caption("כניסה כאורח")
+        if st.button("התחברות / הרשמה", use_container_width=True, type="primary"):
+            st.session_state.pop("landing_done", None)
+            st.rerun()
 
 
 def render_suggestions():

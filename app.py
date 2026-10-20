@@ -6,6 +6,7 @@ import streamlit as st
 import app_ui
 import admin_ui
 import auth_ui
+import landing_ui
 from auth_db import init_auth_db, get_bot_preferences
 from assistant_service import create_collection, generate_rag_response
 from chat_history import (
@@ -33,6 +34,17 @@ initialize_history()
 if st.query_params.get("admin") == "1":
     admin_ui.render_admin_panel()
     st.stop()
+
+# ─── Landing page ─────────────────────────────────────────────────────────────
+if not st.session_state.get("landing_done"):
+    # If already authenticated from a previous session, skip landing
+    _existing_user = auth_ui.get_current_user()
+    if _existing_user:
+        st.session_state["landing_done"] = True
+    else:
+        entered = landing_ui.render_landing()
+        if not entered:
+            st.stop()
 
 # ─── Auth state ───────────────────────────────────────────────────────────────
 user = auth_ui.get_current_user()
@@ -65,8 +77,9 @@ def get_collection():
 app_ui.render_header(user)
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
-sidebar_result = app_ui.render_sidebar(list_conversations(), user)
-sidebar_action, show_auth = sidebar_result
+user_id = user["sub"] if user else None
+sidebar_result = app_ui.render_sidebar(list_conversations(user_id=user_id), user)
+sidebar_action, _ = sidebar_result
 
 if sidebar_action:
     action, selected_conversation_id = sidebar_action
@@ -80,11 +93,6 @@ if sidebar_action:
     else:
         st.query_params["conversation"] = selected_conversation_id
     st.rerun()
-
-# ─── Auth panel ───────────────────────────────────────────────────────────────
-if show_auth and not user:
-    auth_ui.render_auth_page()
-    st.stop()
 
 # ─── Preferences panel ────────────────────────────────────────────────────────
 if st.session_state.get("show_preferences") and user:
@@ -152,7 +160,7 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    save_message(conversation_id, "user", question)
+    save_message(conversation_id, "user", question, user_id=user_id)
 
     with st.chat_message("assistant"):
         with st.spinner("מחפש מידע באתר הפניקס..."):
@@ -186,7 +194,7 @@ if question:
 
     message_id = save_message(
         conversation_id, "assistant", answer, sources,
-        chunk_ids=chunk_ids, prompt_text=prompt_text,
+        chunk_ids=chunk_ids, prompt_text=prompt_text, user_id=user_id,
     )
     st.session_state.messages.append({
         "role": "assistant",

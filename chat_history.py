@@ -24,10 +24,12 @@ def initialize_history(database_path=DATABASE_PATH):
             """
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
+                user_id TEXT,
                 title TEXT NOT NULL DEFAULT 'שיחה חדשה',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE INDEX IF NOT EXISTS conversations_user_id_idx ON conversations(user_id);
 
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +72,9 @@ def initialize_history(database_path=DATABASE_PATH):
             connection.execute("ALTER TABLE messages ADD COLUMN chunk_ids_json TEXT NOT NULL DEFAULT '[]'")
         if "prompt_text" not in existing_cols:
             connection.execute("ALTER TABLE messages ADD COLUMN prompt_text TEXT")
+        conv_cols = {row[1] for row in connection.execute("PRAGMA table_info(conversations)").fetchall()}
+        if "user_id" not in conv_cols:
+            connection.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT")
         connection.execute(
             """
             DELETE FROM conversations
@@ -95,17 +100,30 @@ def conversation_exists(conversation_id, database_path=DATABASE_PATH):
     return row is not None
 
 
-def list_conversations(limit=20, database_path=DATABASE_PATH):
+def list_conversations(limit=20, database_path=DATABASE_PATH, user_id=None):
     with closing(_connect(database_path)) as connection:
-        rows = connection.execute(
-            """
-            SELECT id, title, updated_at
-            FROM conversations
-            ORDER BY updated_at DESC, created_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if user_id:
+            rows = connection.execute(
+                """
+                SELECT id, title, updated_at
+                FROM conversations
+                WHERE user_id = ?
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT id, title, updated_at
+                FROM conversations
+                WHERE user_id IS NULL
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -140,6 +158,7 @@ def save_message(
     conversation_title=None,
     chunk_ids=None,
     prompt_text=None,
+    user_id=None,
 ):
     sources_json = json.dumps(sources or [], ensure_ascii=False)
     chunk_ids_json = json.dumps(chunk_ids or [], ensure_ascii=False)
@@ -147,8 +166,8 @@ def save_message(
     with closing(_connect(database_path)) as connection:
         with connection:
             connection.execute(
-                "INSERT INTO conversations (id) VALUES (?) ON CONFLICT(id) DO NOTHING",
-                (conversation_id,),
+                "INSERT INTO conversations (id, user_id) VALUES (?, ?) ON CONFLICT(id) DO NOTHING",
+                (conversation_id, user_id),
             )
             cursor = connection.execute(
                 """
