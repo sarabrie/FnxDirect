@@ -2,10 +2,23 @@ import html
 import re
 from urllib.parse import urlsplit
 import streamlit as st
+import auth_ui
+
+DISLIKE_REASONS = [
+    "המידע אינו מדויק או שגוי",
+    "התשובה לא ענתה על מה ששאלתי",
+    "התשובה לא הייתה מפורטת מספיק",
+    "הניסוח לא היה ברור / מבלבל",
+    "הטון או אופן הפנייה לא היו נעימים",
+]
 
 
-def render_header():
-    st.markdown("""
+def render_header(user=None):
+    greeting_html = ""
+    if user:
+        name = html.escape(user.get("name", "משתמש"))
+        greeting_html = f'<div style="font-size:13px;color:#087e70;font-weight:700;margin-bottom:6px">שלום, {name} 👋</div>'
+    st.markdown(f"""{greeting_html}""" + """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');
 
@@ -146,6 +159,33 @@ def render_header():
     color: var(--green);
     flex-shrink: 0;
 }
+
+/* ── Feedback ── */
+.fb-row { display:flex; gap:6px; margin-top:10px; align-items:center; direction:rtl; }
+.fb-btn {
+    background:none; border:1px solid var(--line); border-radius:8px;
+    padding:4px 10px; font-size:15px; cursor:pointer;
+    transition:background 0.15s, border-color 0.15s;
+    font-family:'Heebo',sans-serif;
+}
+.fb-btn:hover { background:var(--green-light); border-color:var(--green); }
+.fb-btn.active { background:var(--green-light); border-color:var(--green); }
+.fb-btn:disabled { opacity:0.45; cursor:default; }
+.fb-toast {
+    font-size:12px; color:var(--green); font-weight:700;
+    padding:4px 10px; background:var(--green-light);
+    border-radius:8px; border:1px solid #c5e0d8;
+    font-family:'Heebo',sans-serif;
+}
+.fb-card {
+    margin-top:10px; padding:14px 16px;
+    background:#fff; border:1px solid #daeae3;
+    border-radius:14px; direction:rtl;
+    font-family:'Heebo',sans-serif;
+    box-shadow:0 4px 16px rgba(8,80,60,0.08);
+    max-width:480px;
+}
+.fb-card-title { font-size:14px; font-weight:700; color:var(--ink); margin-bottom:10px; }
 </style>
 <div style="display:flex;align-items:center;gap:13px;margin-bottom:22px">
   <div class="brand-mark">✳</div>
@@ -158,13 +198,17 @@ def render_header():
 """, unsafe_allow_html=True)
 
 
-def render_sidebar(conversations):
+def render_sidebar(conversations, user=None):
     with st.sidebar:
         st.markdown("### הפניקס")
         st.caption("עוזר מידע אישי")
+        show_auth = auth_ui.render_sidebar_auth(user)
+        st.divider()
         action = None
         if st.button("שיחה חדשה", use_container_width=True):
             action = ("new", None)
+        if user and st.button("⚙️ הגדרות אישיות", use_container_width=True):
+            action = ("preferences", None)
         st.divider()
         st.markdown("**היסטוריית שיחות**")
         for conversation in conversations:
@@ -177,7 +221,7 @@ def render_sidebar(conversations):
         st.divider()
         st.markdown("**נושאים שאפשר לשאול עליהם**")
         st.caption("תביעות · ביטוח רכב · ביטוח דירה · ביטוח נסיעות")
-    return action
+    return action, show_auth
 
 
 def render_suggestions():
@@ -195,14 +239,102 @@ def render_suggestions():
     return selected_question
 
 
-def render_messages(messages):
-    for message in messages:
+def render_messages(messages, on_feedback=None):
+    for idx, message in enumerate(messages):
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
                 st.markdown(message["content"])
                 render_sources(message.get("sources"))
+                if on_feedback and message.get("message_id"):
+                    render_feedback_buttons(message["message_id"], idx)
             else:
                 st.markdown(message["content"])
+
+
+def render_feedback_buttons(message_id, idx):
+    fb_key = f"fb_{message_id}"
+    state = st.session_state.get(fb_key, "idle")  # idle | liked | dislike_open | submitted
+
+    if state == "liked":
+        st.markdown('<div class="fb-toast">תודה על המשוב שלך! 👍</div>', unsafe_allow_html=True)
+        return
+    if state == "submitted":
+        st.markdown('<div class="fb-toast">המשוב התקבל, תודה שעזרת לנו להשתפר! ❤️</div>', unsafe_allow_html=True)
+        return
+
+    col_like, col_dislike, _ = st.columns([1, 1, 8])
+    with col_like:
+        if st.button("👍", key=f"like_{message_id}", help="תשובה טובה", disabled=(state != "idle")):
+            st.session_state[fb_key] = "liked"
+            st.session_state[f"fb_submit_{message_id}"] = {"rating": "LIKE", "reasons": [], "comment": ""}
+            st.rerun()
+    with col_dislike:
+        if st.button("👎", key=f"dislike_{message_id}", help="דווח על בעיה", disabled=(state not in {"idle", "dislike_open"})):
+            st.session_state[fb_key] = "idle" if state == "dislike_open" else "dislike_open"
+            st.rerun()
+
+    if state == "dislike_open":
+        st.markdown('<div class="fb-card"><div class="fb-card-title">מה לא היה בסדר?</div></div>', unsafe_allow_html=True)
+        selected = []
+        for reason in DISLIKE_REASONS:
+            if st.checkbox(reason, key=f"reason_{message_id}_{reason}"):
+                selected.append(reason)
+        comment = st.text_area(
+            "פרטים נוספים",
+            placeholder="נשמח לפרטים נוספים שיעזרו לנו להשתפר...",
+            key=f"comment_{message_id}",
+            label_visibility="collapsed",
+            height=80,
+        )
+        c1, c2, _ = st.columns([2, 2, 6])
+        with c1:
+            if st.button("שלח משוב", key=f"submit_fb_{message_id}", type="primary"):
+                st.session_state[f"fb_submit_{message_id}"] = {
+                    "rating": "DISLIKE",
+                    "reasons": selected,
+                    "comment": comment,
+                }
+                st.session_state[fb_key] = "submitted"
+                st.rerun()
+        with c2:
+            if st.button("ביטול", key=f"cancel_fb_{message_id}"):
+                st.session_state[fb_key] = "idle"
+                st.rerun()
+
+
+def render_preferences_panel(user, on_save):
+    from auth_db import get_bot_preferences, save_bot_preferences
+    prefs = get_bot_preferences(user["sub"])
+
+    st.markdown("### הגדרות אישיות")
+    preferred_name = st.text_input(
+        "שם / פנייה מועדפת",
+        value=prefs.get("preferred_name") or "",
+        placeholder="לדוגמא: רינה",
+    )
+    response_length = st.radio(
+        "אורך תשובה",
+        options=["short", "standard", "detailed"],
+        format_func=lambda x: {
+            "short": "קצר ותמציתי (עד 3 משפטים)",
+            "standard": "סטנדרטי (1-2 פסקאות)",
+            "detailed": "מפורט ומעמיק (עם נקודות)",
+        }[x],
+        index=["short", "standard", "detailed"].index(prefs.get("response_length", "standard")),
+        horizontal=True,
+    )
+    tone = st.radio(
+        "סגנון וטון",
+        options=["simple", "formal"],
+        format_func=lambda x: "פשוט ובגובה העיניים" if x == "simple" else "מקצועי ורשמי",
+        index=["simple", "formal"].index(prefs.get("tone", "simple")),
+        horizontal=True,
+    )
+    if st.button("שמור הגדרות", type="primary"):
+        save_bot_preferences(user["sub"], preferred_name or None, response_length, tone)
+        st.success("ההגדרות נשמרו בהצלחה!")
+        if on_save:
+            on_save({"preferred_name": preferred_name or None, "response_length": response_length, "tone": tone})
 
 
 def _clean_source_title(title, url=None):

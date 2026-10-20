@@ -1,7 +1,27 @@
 import os
+import ssl
 from pathlib import Path
 import time
 from urllib.parse import urlsplit
+
+# ── SSL fix for Windows corporate/dev environments ────────────────────────────
+ssl._create_default_https_context = ssl._create_unverified_context
+os.environ["CURL_CA_BUNDLE"] = ""
+os.environ["REQUESTS_CA_BUNDLE"] = ""
+
+import httpx
+_original_init = httpx.Client.__init__
+def _patched_init(self, *args, **kwargs):
+    kwargs["verify"] = False
+    _original_init(self, *args, **kwargs)
+httpx.Client.__init__ = _patched_init
+
+_original_async_init = httpx.AsyncClient.__init__
+def _patched_async_init(self, *args, **kwargs):
+    kwargs["verify"] = False
+    _original_async_init(self, *args, **kwargs)
+httpx.AsyncClient.__init__ = _patched_async_init
+# ─────────────────────────────────────────────────────────────────────────────
 
 from dotenv import load_dotenv
 import chromadb
@@ -73,22 +93,24 @@ def _get_gemini_client():
     return genai.Client(api_key=gemini_api_key)
 
 
-
-def generate_rag_response(question, collection):
+def generate_rag_response(question, collection, user_prefs=None):
+    """Returns (answer_text, sources, chunk_ids, prompt_text)."""
     result_count = min(10, collection.count())
     if result_count == 0:
-        return "זה לא כתוב באתר הפניקס.", []
+        return "זה לא כתוב באתר הפניקס.", [], [], ""
 
     results = collection.query(query_texts=[question], n_results=result_count)
     documents = results.get("documents", [[]])[0]
     metadatas = results.get("metadatas", [[]])[0]
+    ids = results.get("ids", [[]])[0]
 
     if not documents:
-        return "זה לא כתוב באתר הפניקס.", []
+        return "זה לא כתוב באתר הפניקס.", [], [], ""
 
     context_text = ""
     sources = []
-    for document, metadata in zip(documents, metadatas):
+    chunk_ids = []
+    for document, metadata, chunk_id in zip(documents, metadatas, ids):
         if not isinstance(document, str) or not document.strip():
             continue
         if not isinstance(metadata, dict):
@@ -107,16 +129,37 @@ def generate_rag_response(question, collection):
             "url": _source_url(metadata),
             "title": title if isinstance(title, str) else None,
         })
+        chunk_ids.append(chunk_id)
 
     if not context_text:
-        return "זה לא כתוב באתר הפניקס.", []
+        return "זה לא כתוב באתר הפניקס.", [], [], ""
 
-    prompt = f"""
-אתה עוזר וירטואלי של חברת הפניקס.
+    prefs = user_prefs or {}
+    preferred_name = prefs.get("preferred_name")
+    response_length = prefs.get("response_length", "standard")
+    tone = prefs.get("tone", "simple")
+
+    length_instruction = {
+        "short": "ענה בקצרה ובתמציתיות, עד 3 משפטים.",
+        "standard": "ענה בפסקה-שתיים סטנדרטיות.",
+        "detailed": "ענה באופן מפורט ומעמיק, כולל נקודות ודוגמאות במידת הצורך.",
+    }.get(response_length, "ענה בפסקה-שתיים סטנדרטיות.")
+
+    tone_instruction = (
+        "השתמש בשפה פשוטה ובגובה העיניים, ללא טרמינולוגיה משפטית."
+        if tone == "simple"
+        else "השתמש בשפה מקצועית ורשמית עם טרמינולוגיה ביטוחית."
+    )
+
+    salutation = f"פנה למשתמש בשם '{preferred_name}'." if preferred_name else ""
+
+    prompt = f"""אתה עוזר וירטואלי של חברת הפניקס.
 ענה בעברית ובצורה ברורה, ורק על סמך הקטעים המצורפים.
+{salutation}
+{length_instruction}
+{tone_instruction}
 בדוק את כל הקטעים לפני המענה. מידע עשוי להופיע תחת כותרת אחרת או בניסוח שונה מהשאלה.
 אם קטע עונה על חלק מהשאלה, מסור את המידע הנתמך וציין אילו פרטים אינם מופיעים.
-אל תענה "זה לא כתוב באתר הפניקס" אם אחד הקטעים מכיל מידע רלוונטי, גם אם אינו עונה על כל השאלה.
 אל תוסיף עובדות שאינן מופיעות בקטעים. אם אף קטע אינו מכיל מידע רלוונטי, ענה בדיוק: "זה לא כתוב באתר הפניקס."
 המקורות יוצגו בנפרד מהתשובה.
 
@@ -139,7 +182,8 @@ def generate_rag_response(question, collection):
                 model="gemini-3.8-flash", contents=prompt, config=config
             )
             client.close()
-            return response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע.", sources
+            answer = response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
+            return answer, sources, chunk_ids, prompt
         except Exception as e:
             client.close()
             last_error = e

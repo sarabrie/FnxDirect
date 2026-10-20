@@ -4,11 +4,9 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 from dotenv import load_dotenv
 import streamlit as st
 import app_ui
-from assistant_service import (
-    create_collection,
-    generate_rag_response,
-)
-
+import auth_ui
+from auth_db import init_auth_db, get_bot_preferences
+from assistant_service import create_collection, generate_rag_response
 from chat_history import (
     conversation_exists,
     initialize_history,
@@ -16,6 +14,7 @@ from chat_history import (
     load_messages,
     new_conversation_id,
     save_message,
+    save_feedback,
 )
 
 load_dotenv()
@@ -26,8 +25,13 @@ st.set_page_config(
     layout="centered",
 )
 
+init_auth_db()
 initialize_history()
 
+# ─── Auth state ───────────────────────────────────────────────────────────────
+user = auth_ui.get_current_user()
+
+# ─── Conversation routing ─────────────────────────────────────────────────────
 requested_conversation_id = st.query_params.get("conversation")
 if (
     requested_conversation_id
@@ -51,7 +55,47 @@ def get_collection():
     return create_collection()
 
 
-app_ui.render_header()
+# ─── Header ──────────────────────────────────────────────────────────────────
+app_ui.render_header(user)
+
+# ─── Sidebar ─────────────────────────────────────────────────────────────────
+sidebar_result = app_ui.render_sidebar(list_conversations(), user)
+sidebar_action, show_auth = sidebar_result
+
+if sidebar_action:
+    action, selected_conversation_id = sidebar_action
+    if action == "new":
+        conversation_id = new_conversation_id()
+        st.session_state.conversation_id = conversation_id
+        st.session_state.messages = []
+        st.query_params["conversation"] = conversation_id
+    elif action == "preferences":
+        st.session_state["show_preferences"] = not st.session_state.get("show_preferences", False)
+    else:
+        st.query_params["conversation"] = selected_conversation_id
+    st.rerun()
+
+# ─── Auth panel ───────────────────────────────────────────────────────────────
+if show_auth and not user:
+    auth_ui.render_auth_page()
+    st.stop()
+
+# ─── Preferences panel ────────────────────────────────────────────────────────
+if st.session_state.get("show_preferences") and user:
+    def _on_prefs_save(new_prefs):
+        st.session_state["user_prefs"] = new_prefs
+        st.session_state["show_preferences"] = False
+
+    app_ui.render_preferences_panel(user, on_save=_on_prefs_save)
+    st.stop()
+
+# ─── Load user prefs (cached in session) ─────────────────────────────────────
+if user and "user_prefs" not in st.session_state:
+    st.session_state["user_prefs"] = get_bot_preferences(user["sub"])
+
+user_prefs = st.session_state.get("user_prefs") if user else None
+
+# ─── Collection load ──────────────────────────────────────────────────────────
 try:
     with st.spinner("מכין את עוזר החיפוש. הטעינה הראשונה עשויה להימשך כחצי דקה..."):
         collection = get_collection()
@@ -60,23 +104,39 @@ except Exception as error:
     st.error("לא הצלחתי לטעון את מודל החיפוש. בדקו את חיבור האינטרנט ונסו להפעיל מחדש.")
     st.stop()
 
-sidebar_action = app_ui.render_sidebar(list_conversations())
-if sidebar_action:
-    action, selected_conversation_id = sidebar_action
-    if action == "new":
-        conversation_id = new_conversation_id()
-        st.session_state.conversation_id = conversation_id
-        st.session_state.messages = []
-        st.query_params["conversation"] = conversation_id
-    else:
-        st.query_params["conversation"] = selected_conversation_id
-    st.rerun()
+# ─── Flush pending feedback ───────────────────────────────────────────────────
+for msg in st.session_state.messages:
+    mid = msg.get("message_id")
+    if not mid:
+        continue
+    pending_key = f"fb_submit_{mid}"
+    if pending_key in st.session_state:
+        fb = st.session_state.pop(pending_key)
+        save_feedback(
+            message_id=mid,
+            conversation_id=conversation_id,
+            user_id=user["sub"] if user else None,
+            rating=fb["rating"],
+            reasons=fb["reasons"],
+            comment=fb.get("comment", ""),
+        )
+
+# ─── Chat ─────────────────────────────────────────────────────────────────────
+def _on_feedback(message_id, rating, reasons, comment):
+    save_feedback(
+        message_id=message_id,
+        conversation_id=conversation_id,
+        user_id=user["sub"] if user else None,
+        rating=rating,
+        reasons=reasons,
+        comment=comment,
+    )
 
 if not st.session_state.messages:
     selected_question = app_ui.render_suggestions()
 else:
     selected_question = None
-    app_ui.render_messages(st.session_state.messages)
+    app_ui.render_messages(st.session_state.messages, on_feedback=_on_feedback)
 
 typed_question = st.chat_input("כתבו את השאלה שלכם...")
 question = typed_question or selected_question
@@ -86,16 +146,14 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    save_message(
-        conversation_id,
-        "user",
-        question,
-    )
+    save_message(conversation_id, "user", question)
 
     with st.chat_message("assistant"):
         with st.spinner("מחפש מידע באתר הפניקס..."):
             try:
-                response, sources = generate_rag_response(question, collection)
+                response, sources, chunk_ids, prompt_text = generate_rag_response(
+                    question, collection, user_prefs=user_prefs
+                )
                 if isinstance(response, str):
                     answer = response
                     st.markdown(answer)
@@ -106,27 +164,28 @@ if question:
                     st.markdown(answer)
                 if "זה לא כתוב באתר" in answer:
                     sources = []
+                    chunk_ids = []
             except RuntimeError as error:
-                answer, sources = str(error), []
+                answer, sources, chunk_ids, prompt_text = str(error), [], [], ""
                 st.markdown(answer)
             except Exception as error:
                 print(f"שגיאה ביצירת תשובה: {type(error).__name__}: {error}")
-                if (
-                    getattr(error, "code", None) == 429
-                    or "429" in str(error)
-                    or "RESOURCE_EXHAUSTED" in str(error)
-                ):
-                    answer = "מכסת השימוש ב-Gemini הסתיימה (429 RESOURCE_EXHAUSTED). נסו שוב לאחר איפוס המכסה, או הגדירו מפתח API נוסף עם מכסה פנויה."
+                if getattr(error, "code", None) == 429 or "429" in str(error) or "RESOURCE_EXHAUSTED" in str(error):
+                    answer = "מכסת השימוש ב-Gemini הסתיימה. נסו שוב לאחר איפוס המכסה."
                 else:
                     answer = f"שגיאה: {type(error).__name__}: {error}"
-                sources = []
+                sources, chunk_ids, prompt_text = [], [], ""
                 st.markdown(answer)
             app_ui.render_sources(sources)
 
+    message_id = save_message(
+        conversation_id, "assistant", answer, sources,
+        chunk_ids=chunk_ids, prompt_text=prompt_text,
+    )
     st.session_state.messages.append({
         "role": "assistant",
         "content": answer,
         "sources": sources,
+        "message_id": message_id,
     })
-    save_message(conversation_id, "assistant", answer, sources)
     st.rerun()

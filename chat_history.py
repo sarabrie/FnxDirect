@@ -35,13 +35,41 @@ def initialize_history(database_path=DATABASE_PATH):
                 role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
                 content TEXT NOT NULL,
                 sources_json TEXT NOT NULL DEFAULT '[]',
+                chunk_ids_json TEXT NOT NULL DEFAULT '[]',
+                prompt_text TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE INDEX IF NOT EXISTS messages_conversation_id_idx
                 ON messages(conversation_id, id);
+
+            CREATE TABLE IF NOT EXISTS message_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                conversation_id TEXT NOT NULL,
+                user_id TEXT,
+                rating TEXT NOT NULL CHECK (rating IN ('LIKE', 'DISLIKE')),
+                reasons_json TEXT NOT NULL DEFAULT '[]',
+                comment TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS feedback_message_idx ON message_feedback(message_id);
+
+            CREATE TABLE IF NOT EXISTS chunk_scores (
+                chunk_id TEXT PRIMARY KEY,
+                score REAL NOT NULL DEFAULT 1.0,
+                dislike_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
+        # Migrate existing DB: add columns if they don't exist yet
+        existing_cols = {row[1] for row in connection.execute("PRAGMA table_info(messages)").fetchall()}
+        if "chunk_ids_json" not in existing_cols:
+            connection.execute("ALTER TABLE messages ADD COLUMN chunk_ids_json TEXT NOT NULL DEFAULT '[]'")
+        if "prompt_text" not in existing_cols:
+            connection.execute("ALTER TABLE messages ADD COLUMN prompt_text TEXT")
         connection.execute(
             """
             DELETE FROM conversations
@@ -109,8 +137,11 @@ def save_message(
     sources=None,
     database_path=DATABASE_PATH,
     conversation_title=None,
+    chunk_ids=None,
+    prompt_text=None,
 ):
     sources_json = json.dumps(sources or [], ensure_ascii=False)
+    chunk_ids_json = json.dumps(chunk_ids or [], ensure_ascii=False)
     title = " ".join((conversation_title or content).split())[:48]
     with closing(_connect(database_path)) as connection:
         with connection:
@@ -118,12 +149,12 @@ def save_message(
                 "INSERT INTO conversations (id) VALUES (?) ON CONFLICT(id) DO NOTHING",
                 (conversation_id,),
             )
-            connection.execute(
+            cursor = connection.execute(
                 """
-                INSERT INTO messages (conversation_id, role, content, sources_json)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO messages (conversation_id, role, content, sources_json, chunk_ids_json, prompt_text)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (conversation_id, role, content, sources_json),
+                (conversation_id, role, content, sources_json, chunk_ids_json, prompt_text),
             )
             connection.execute(
                 """
@@ -137,6 +168,7 @@ def save_message(
                 """,
                 (role, title, conversation_id),
             )
+    return cursor.lastrowid
 
 
 def delete_conversation(conversation_id, database_path=DATABASE_PATH):
@@ -146,3 +178,77 @@ def delete_conversation(conversation_id, database_path=DATABASE_PATH):
                 "DELETE FROM conversations WHERE id = ?",
                 (conversation_id,),
             )
+
+
+def get_last_message_id(conversation_id, role="assistant", database_path=DATABASE_PATH):
+    with closing(_connect(database_path)) as connection:
+        row = connection.execute(
+            "SELECT id FROM messages WHERE conversation_id=? AND role=? ORDER BY id DESC LIMIT 1",
+            (conversation_id, role),
+        ).fetchone()
+    return row["id"] if row else None
+
+
+def save_feedback(message_id, conversation_id, user_id, rating, reasons, comment, database_path=DATABASE_PATH):
+    reasons_json = json.dumps(reasons or [], ensure_ascii=False)
+    with closing(_connect(database_path)) as connection:
+        with connection:
+            # Upsert: one feedback per user per message
+            existing = connection.execute(
+                "SELECT id FROM message_feedback WHERE message_id=? AND (user_id=? OR (user_id IS NULL AND ?=''))",
+                (message_id, user_id, user_id or ""),
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    "UPDATE message_feedback SET rating=?, reasons_json=?, comment=?, created_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (rating, reasons_json, comment, existing["id"]),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO message_feedback (message_id, conversation_id, user_id, rating, reasons_json, comment) VALUES (?,?,?,?,?,?)",
+                    (message_id, conversation_id, user_id, rating, reasons_json, comment),
+                )
+            # Update chunk scores for dislikes with inaccuracy reason
+            if rating == "DISLIKE" and "המידע אינו מדויק או שגוי" in (reasons or []):
+                row = connection.execute(
+                    "SELECT chunk_ids_json FROM messages WHERE id=?", (message_id,)
+                ).fetchone()
+                if row:
+                    chunk_ids = json.loads(row["chunk_ids_json"] or "[]")
+                    for cid in chunk_ids:
+                        connection.execute(
+                            """
+                            INSERT INTO chunk_scores (chunk_id, score, dislike_count)
+                            VALUES (?, 0.9, 1)
+                            ON CONFLICT(chunk_id) DO UPDATE SET
+                                dislike_count = dislike_count + 1,
+                                score = MAX(0.1, score - 0.1),
+                                updated_at = CURRENT_TIMESTAMP
+                            """,
+                            (cid,),
+                        )
+
+
+def get_chunk_score(chunk_id, database_path=DATABASE_PATH):
+    with closing(_connect(database_path)) as connection:
+        row = connection.execute(
+            "SELECT score FROM chunk_scores WHERE chunk_id=?", (chunk_id,)
+        ).fetchone()
+    return row["score"] if row else 1.0
+
+
+def get_negative_feedback(limit=50, database_path=DATABASE_PATH):
+    with closing(_connect(database_path)) as connection:
+        rows = connection.execute(
+            """
+            SELECT f.id, f.message_id, f.conversation_id, f.user_id,
+                   f.rating, f.reasons_json, f.comment, f.created_at,
+                   m.content as message_content
+            FROM message_feedback f
+            JOIN messages m ON m.id = f.message_id
+            WHERE f.rating = 'DISLIKE'
+            ORDER BY f.created_at DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
