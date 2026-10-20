@@ -1,0 +1,7 @@
+chromadb
+firecrawl-py
+google-genai
+langchain-text-splitters
+python-dotenv
+sentence-transformers
+streamlit

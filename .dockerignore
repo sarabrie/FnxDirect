@@ -1,0 +1,9 @@
+.git
+.env
+.venv
+venv
+__pycache__
+*.py[cod]
+*.pdf
+chat_history.sqlite3
+chat_history.sqlite3-*

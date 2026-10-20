@@ -1,11 +1,14 @@
 import json
+import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
 
-DATABASE_PATH = Path(__file__).with_name("chat_history.sqlite3")
+DATABASE_PATH = Path(
+    os.getenv("CHAT_HISTORY_DB_PATH", Path(__file__).with_name("chat_history.sqlite3"))
+)
 
 
 def _connect(database_path=DATABASE_PATH):
