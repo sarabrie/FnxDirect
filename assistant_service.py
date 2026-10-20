@@ -53,7 +53,8 @@ def generate_rag_response(question, collection):
 שאלה: {question}
 """
 
-    response = _get_gemini_client().models.generate_content(
+    client = _get_gemini_client()
+    response = client.models.generate_content(
         model="gemini-3.8-flash",
         contents=prompt,
     )
@@ -65,7 +66,8 @@ def generate_rag_response(question, collection):
 
 
 def generate_conversation_title(question):
-    response = _get_gemini_client().models.generate_content(
+    client = _get_gemini_client()
+    response = client.models.generate_content(
         model="gemini-3.8-flash",
         contents=(
             "צור כותרת קצרה ומסכמת לשיחה על סמך השאלה הראשונה בלבד. "
