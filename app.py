@@ -1,18 +1,14 @@
-import importlib
 import os
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
 from dotenv import load_dotenv
 import streamlit as st
-import chat_history
 import app_ui
 from assistant_service import (
     create_collection,
     generate_conversation_title,
     generate_rag_response,
 )
-
-importlib.reload(chat_history)
 
 from chat_history import (
     conversation_exists,
@@ -72,12 +68,9 @@ if sidebar_action:
 
 try:
     collection = get_collection()
-except Exception:
-    st.error("לא הצלחתי להתחבר למסד המידע. ודאו שתיקיית fnx_db קיימת ונסו להפעיל מחדש.")
+except Exception as error:
+    st.error(f"לא הצלחתי להתחבר למסד המידע: {error}. ודאו שתיקיית fnx_db קיימת ונסו להפעיל מחדש.")
     st.stop()
-
-if st.session_state.pop("title_generation_warning", False):
-    st.warning("לא הצלחתי ליצור כותרת מסכמת; השאלה הראשונה תשמש ככותרת.")
 
 if not st.session_state.messages:
     selected_question = app_ui.render_suggestions()
@@ -91,11 +84,7 @@ question = typed_question or selected_question
 if question:
     conversation_title = None
     if not st.session_state.messages:
-        try:
-            conversation_title = generate_conversation_title(question)
-        except Exception as error:
-            print(f"שגיאה ביצירת כותרת לשיחה: {type(error).__name__}: {error}")
-            st.session_state.title_generation_warning = True
+        conversation_title = " ".join(question.split()[:6])[:48]
 
     st.session_state.messages.append({"role": "user", "content": question})
     save_message(
@@ -117,11 +106,12 @@ if question:
                 print(f"שגיאה ביצירת תשובה: {type(error).__name__}: {error}")
                 if (
                     getattr(error, "code", None) == 429
+                    or "429" in str(error)
                     or "RESOURCE_EXHAUSTED" in str(error)
                 ):
-                    answer = "מכסת השימוש ב-Gemini הסתיימה. נסו שוב לאחר איפוס המכסה, או בדקו את מגבלות התוכנית והחיוב בחשבון Google AI."
+                    answer = "מכסת השימוש ב-Gemini הסתיימה (429 RESOURCE_EXHAUSTED). נסו שוב לאחר איפוס המכסה, או הגדירו מפתח API נוסף עם מכסה פנויה."
                 else:
-                    answer = "לא הצלחתי לקבל תשובה כרגע. בדקו את החיבור ונסו שוב."
+                    answer = f"שגיאה: {type(error).__name__}: {error}"
                 sources = []
         app_ui.render_message_content(answer, sources)
 

@@ -1,19 +1,33 @@
+from pathlib import Path
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-# 1. טעינת מודל ההטמעה (Embedding Model) שמתרגם טקסט לווקטורים
-# אנחנו משתמשים במודל קוד פתוח מעולה מבית HuggingFace
-print("טוען את מודל ההטמעה...")
-embedding_function = SentenceTransformerEmbeddingFunction(
-    model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-)
+DB_PATH = str(Path(__file__).resolve().parent / "fnx_db")
+_collection = None
 
-# 2. אתחול מסד הנתונים הווקטורי ChromaDB (נשמר באופן מקומי בתיקייה בשם fnx_db)
-chroma_client = chromadb.PersistentClient(path="./fnx_db")
-collection = chroma_client.get_or_create_collection(
-    name="fnx_website_chunks_multilingual",
-    embedding_function=embedding_function,
-)
+
+def get_collection():
+    """
+    אתחול עצל (Lazy) של מסד הנתונים ומודל ההטמעה, כדי למנוע טעינה כבדה בעת ייבוא
+    """
+    global _collection
+    if _collection is None:
+        print("טוען את מודל ההטמעה...")
+        embedding_function = SentenceTransformerEmbeddingFunction(
+            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        )
+        chroma_client = chromadb.PersistentClient(path=DB_PATH)
+        _collection = chroma_client.get_or_create_collection(
+            name="fnx_website_chunks_multilingual",
+            embedding_function=embedding_function,
+        )
+    return _collection
+
+
+def __getattr__(name):
+    if name == "collection":
+        return get_collection()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 def save_chunks_to_chroma(chunks_with_metadata):
     """
