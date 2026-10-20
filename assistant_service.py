@@ -2,6 +2,7 @@ import os
 
 import chromadb
 from google import genai
+from google.genai import types
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 
@@ -22,8 +23,22 @@ def _get_gemini_client():
     return genai.Client(api_key=gemini_api_key)
 
 
+def _response_text_chunks(response_stream, client):
+    try:
+        for chunk in response_stream:
+            text = chunk.text
+            if text:
+                yield text
+    finally:
+        client.close()
+
+
 def generate_rag_response(question, collection):
-    results = collection.query(query_texts=[question], n_results=5)
+    result_count = min(10, collection.count())
+    if result_count == 0:
+        return "זה לא כתוב באתר הפניקס.", []
+
+    results = collection.query(query_texts=[question], n_results=result_count)
     documents = results.get("documents", [[]])[0]
     metadatas = results.get("metadatas", [[]])[0]
 
@@ -33,19 +48,24 @@ def generate_rag_response(question, collection):
     context_text = ""
     sources = []
     for document, metadata in zip(documents, metadatas):
-        context_text += f"- {document}\n"
+        title = metadata.get("title")
+        if title:
+            context_text += f"- עמוד: {title}\n  קטע: {document}\n"
+        else:
+            context_text += f"- {document}\n"
         url = metadata.get("url")
         if url and url not in sources:
             sources.append(url)
 
     prompt = f"""
 אתה עוזר וירטואלי של חברת הפניקס.
-    ענה בעברית ובצורה ברורה, ורק על סמך הקטעים המצורפים.
-    חפש מידע רלוונטי בכל הקטעים, כולל כותרות, רשימות וניסוחים שקולים לשאלה.
-    אם קטע עונה על חלק מהשאלה, מסור את המידע הנתמך וציין אילו פרטים אינם מופיעים.
-    אל תוסיף עובדות שאינן מופיעות בקטעים. אם אף קטע אינו מכיל מידע רלוונטי, ענה בדיוק: "זה לא כתוב באתר הפניקס."
-    דוגמה: אם הקטע אומר "מעקב פשוט ונוח אחר ההשקעה שלך" והשאלה היא מה האפליקציה מאפשרת, ענה: "האפליקציה מאפשרת מעקב פשוט ונוח אחר ההשקעה שלך."
-    המקורות יוצגו בנפרד מהתשובה.
+ענה בעברית ובצורה ברורה, ורק על סמך הקטעים המצורפים.
+בדוק את כל הקטעים לפני המענה. מידע עשוי להופיע תחת כותרת אחרת או בניסוח שונה מהשאלה.
+אם קטע עונה על חלק מהשאלה, מסור את המידע הנתמך וציין אילו פרטים אינם מופיעים.
+אל תענה "זה לא כתוב באתר הפניקס" אם אחד הקטעים מכיל מידע רלוונטי, גם אם אינו עונה על כל השאלה.
+אל תוסיף עובדות שאינן מופיעות בקטעים. אם אף קטע אינו מכיל מידע רלוונטי, ענה בדיוק: "זה לא כתוב באתר הפניקס."
+דוגמה: אם הקטע אומר "מעקב פשוט ונוח אחר ההשקעה שלך" והשאלה היא מה האפליקציה מאפשרת, ענה: "האפליקציה מאפשרת מעקב פשוט ונוח אחר ההשקעה שלך."
+המקורות יוצגו בנפרד מהתשובה.
 
 הקשר מתוך האתר:
 {context_text}
@@ -54,15 +74,22 @@ def generate_rag_response(question, collection):
 """
 
     client = _get_gemini_client()
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt,
-    )
+    try:
+        response_stream = client.models.generate_content_stream(
+            model="gemini-3.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=512,
+                thinking_config=types.ThinkingConfig(
+                    thinking_level=types.ThinkingLevel.LOW,
+                ),
+            ),
+        )
+    except Exception:
+        client.close()
+        raise
 
-    answer = response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
-    if "זה לא כתוב באתר" in answer:
-        sources = []
-    return answer, sources
+    return _response_text_chunks(response_stream, client), sources
 
 
 def generate_conversation_title(question):

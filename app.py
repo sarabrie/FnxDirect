@@ -8,7 +8,6 @@ import chat_history
 import app_ui
 from assistant_service import (
     create_collection,
-    generate_conversation_title,
     generate_rag_response,
 )
 
@@ -57,6 +56,13 @@ def get_collection():
 
 
 app_ui.render_header()
+try:
+    with st.spinner("מכין את עוזר החיפוש. הטעינה הראשונה עשויה להימשך כחצי דקה..."):
+        collection = get_collection()
+except Exception as error:
+    print(f"שגיאה בטעינת מסד המידע: {type(error).__name__}: {error}")
+    st.error("לא הצלחתי לטעון את מודל החיפוש. בדקו את חיבור האינטרנט ונסו להפעיל מחדש.")
+    st.stop()
 
 sidebar_action = app_ui.render_sidebar(list_conversations())
 if sidebar_action:
@@ -70,9 +76,6 @@ if sidebar_action:
         st.query_params["conversation"] = selected_conversation_id
     st.rerun()
 
-if st.session_state.pop("title_generation_warning", False):
-    st.warning("לא הצלחתי ליצור כותרת מסכמת; השאלה הראשונה תשמש ככותרת.")
-
 if not st.session_state.messages:
     selected_question = app_ui.render_suggestions()
 else:
@@ -83,38 +86,33 @@ typed_question = st.chat_input("כתבו את השאלה שלכם...")
 question = typed_question or selected_question
 
 if question:
-    try:
-        with st.spinner("טוען את מודל החיפוש..."):
-            collection = get_collection()
-    except Exception as error:
-        print(f"שגיאה בטעינת מסד המידע: {type(error).__name__}: {error}")
-        st.error("לא הצלחתי להתחבר למסד המידע. ודאו שתיקיית fnx_db קיימת ונסו להפעיל מחדש.")
-        st.stop()
-
-    conversation_title = None
-    if not st.session_state.messages:
-        try:
-            conversation_title = generate_conversation_title(question)
-        except Exception as error:
-            print(f"שגיאה ביצירת כותרת לשיחה: {type(error).__name__}: {error}")
-            st.session_state.title_generation_warning = True
-
     st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.markdown(question)
+
     save_message(
         conversation_id,
         "user",
         question,
-        conversation_title=conversation_title,
     )
-    with st.chat_message("user"):
-        st.markdown(question)
 
     with st.chat_message("assistant"):
         with st.spinner("מחפש מידע באתר הפניקס..."):
             try:
-                answer, sources = generate_rag_response(question, collection)
+                response, sources = generate_rag_response(question, collection)
+                if isinstance(response, str):
+                    answer = response
+                    st.markdown(answer)
+                else:
+                    answer = st.write_stream(response)
+                if not answer:
+                    answer = "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
+                    st.markdown(answer)
+                if "זה לא כתוב באתר" in answer:
+                    sources = []
             except RuntimeError as error:
                 answer, sources = str(error), []
+                st.markdown(answer)
             except Exception as error:
                 print(f"שגיאה ביצירת תשובה: {type(error).__name__}: {error}")
                 if (
@@ -125,7 +123,8 @@ if question:
                 else:
                     answer = "לא הצלחתי לקבל תשובה כרגע. בדקו את החיבור ונסו שוב."
                 sources = []
-        app_ui.render_message_content(answer, sources)
+                st.markdown(answer)
+            app_ui.render_sources(sources)
 
     st.session_state.messages.append({
         "role": "assistant",
