@@ -96,6 +96,10 @@ def render_messages(messages):
 
 def render_message_content(content, sources=None):
     st.markdown(content)
+    render_sources(sources)
+
+
+def render_sources(sources):
     if sources:
         st.markdown("**מקורות**")
         for source in sources:
