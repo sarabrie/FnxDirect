@@ -1,17 +1,13 @@
-import importlib
 import os
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
 from dotenv import load_dotenv
 import streamlit as st
-import chat_history
 import app_ui
 from assistant_service import (
     create_collection,
     generate_rag_response,
 )
-
-importlib.reload(chat_history)
 
 from chat_history import (
     conversation_exists,
@@ -117,11 +113,12 @@ if question:
                 print(f"שגיאה ביצירת תשובה: {type(error).__name__}: {error}")
                 if (
                     getattr(error, "code", None) == 429
+                    or "429" in str(error)
                     or "RESOURCE_EXHAUSTED" in str(error)
                 ):
-                    answer = "מכסת השימוש ב-Gemini הסתיימה. נסו שוב לאחר איפוס המכסה, או בדקו את מגבלות התוכנית והחיוב בחשבון Google AI."
+                    answer = "מכסת השימוש ב-Gemini הסתיימה (429 RESOURCE_EXHAUSTED). נסו שוב לאחר איפוס המכסה, או הגדירו מפתח API נוסף עם מכסה פנויה."
                 else:
-                    answer = "לא הצלחתי לקבל תשובה כרגע. בדקו את החיבור ונסו שוב."
+                    answer = f"שגיאה: {type(error).__name__}: {error}"
                 sources = []
                 st.markdown(answer)
             app_ui.render_sources(sources)

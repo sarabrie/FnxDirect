@@ -1,13 +1,63 @@
 import os
+from pathlib import Path
+import time
+from urllib.parse import urlsplit
 
+from dotenv import load_dotenv
 import chromadb
 from google import genai
 from google.genai import types
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=ENV_PATH)
+
+DB_PATH = str(Path(__file__).resolve().parent / "fnx_db")
+
+
+def _query_results(results, key):
+    values = results.get(key)
+    if not isinstance(values, list) or not values:
+        return []
+    first_result = values[0]
+    return first_result if isinstance(first_result, list) else []
+
+
+def _source_url(metadata):
+    if not isinstance(metadata, dict):
+        return None
+    url = metadata.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        parsed_url = urlsplit(url)
+    except ValueError:
+        return None
+    if (
+        parsed_url.scheme.lower() not in {"http", "https"}
+        or not parsed_url.netloc
+        or parsed_url.path in {"", "/"}
+    ):
+        return None
+    return url
+
+
+def _is_generic_homepage_url(url):
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed_url = urlsplit(url)
+    except ValueError:
+        return False
+    return (
+        parsed_url.scheme.lower() in {"http", "https"}
+        and bool(parsed_url.netloc)
+        and parsed_url.path in {"", "/"}
+    )
+
 
 def create_collection():
-    chroma_client = chromadb.PersistentClient(path="./fnx_db")
+    chroma_client = chromadb.PersistentClient(path=DB_PATH)
     return chroma_client.get_collection(
         name="fnx_website_chunks_multilingual",
         embedding_function=SentenceTransformerEmbeddingFunction(
@@ -48,14 +98,27 @@ def generate_rag_response(question, collection):
     context_text = ""
     sources = []
     for document, metadata in zip(documents, metadatas):
+        if not isinstance(document, str) or not document.strip():
+            continue
+        if not isinstance(metadata, dict):
+            metadata = {}
+        if _is_generic_homepage_url(metadata.get("url")):
+            continue
+
         title = metadata.get("title")
         if title:
             context_text += f"- עמוד: {title}\n  קטע: {document}\n"
         else:
             context_text += f"- {document}\n"
-        url = metadata.get("url")
-        if url and url not in sources:
-            sources.append(url)
+
+        sources.append({
+            "snippet": document,
+            "url": _source_url(metadata),
+            "title": title if isinstance(title, str) else None,
+        })
+
+    if not context_text:
+        return "זה לא כתוב באתר הפניקס.", []
 
     prompt = f"""
 אתה עוזר וירטואלי של חברת הפניקס.
@@ -64,7 +127,6 @@ def generate_rag_response(question, collection):
 אם קטע עונה על חלק מהשאלה, מסור את המידע הנתמך וציין אילו פרטים אינם מופיעים.
 אל תענה "זה לא כתוב באתר הפניקס" אם אחד הקטעים מכיל מידע רלוונטי, גם אם אינו עונה על כל השאלה.
 אל תוסיף עובדות שאינן מופיעות בקטעים. אם אף קטע אינו מכיל מידע רלוונטי, ענה בדיוק: "זה לא כתוב באתר הפניקס."
-דוגמה: אם הקטע אומר "מעקב פשוט ונוח אחר ההשקעה שלך" והשאלה היא מה האפליקציה מאפשרת, ענה: "האפליקציה מאפשרת מעקב פשוט ונוח אחר ההשקעה שלך."
 המקורות יוצגו בנפרד מהתשובה.
 
 הקשר מתוך האתר:
@@ -76,7 +138,7 @@ def generate_rag_response(question, collection):
     client = _get_gemini_client()
     try:
         response_stream = client.models.generate_content_stream(
-            model="gemini-3.5-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 max_output_tokens=512,
@@ -95,7 +157,7 @@ def generate_rag_response(question, collection):
 def generate_conversation_title(question):
     client = _get_gemini_client()
     response = client.models.generate_content(
-        model="gemini-3.8-flash",
+        model="gemini-2.5-flash",
         contents=(
             "צור כותרת קצרה ומסכמת לשיחה על סמך השאלה הראשונה בלבד. "
             "כתוב בעברית, עד 6 מילים, והחזר את הכותרת בלבד ללא מרכאות או הסבר.\n\n"
