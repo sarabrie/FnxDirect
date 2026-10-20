@@ -70,12 +70,6 @@ if sidebar_action:
         st.query_params["conversation"] = selected_conversation_id
     st.rerun()
 
-try:
-    collection = get_collection()
-except Exception:
-    st.error("לא הצלחתי להתחבר למסד המידע. ודאו שתיקיית fnx_db קיימת ונסו להפעיל מחדש.")
-    st.stop()
-
 if st.session_state.pop("title_generation_warning", False):
     st.warning("לא הצלחתי ליצור כותרת מסכמת; השאלה הראשונה תשמש ככותרת.")
 
@@ -89,6 +83,14 @@ typed_question = st.chat_input("כתבו את השאלה שלכם...")
 question = typed_question or selected_question
 
 if question:
+    try:
+        with st.spinner("טוען את מודל החיפוש..."):
+            collection = get_collection()
+    except Exception as error:
+        print(f"שגיאה בטעינת מסד המידע: {type(error).__name__}: {error}")
+        st.error("לא הצלחתי להתחבר למסד המידע. ודאו שתיקיית fnx_db קיימת ונסו להפעיל מחדש.")
+        st.stop()
+
     conversation_title = None
     if not st.session_state.messages:
         try:

@@ -11,6 +11,10 @@
 
 3. Open <http://localhost:8501>.
 
+The first image build downloads the multilingual embedding model (about 480 MB)
+into the image. The app page appears without waiting for the model; it loads the
+already-downloaded model when the first question is submitted.
+
 The ChromaDB index is mounted from `fnx_db` and the conversation history is stored
 in the `chat_history_data` Docker volume. Both persist when the container restarts.
 
