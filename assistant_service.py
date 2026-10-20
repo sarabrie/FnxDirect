@@ -138,7 +138,7 @@ def generate_rag_response(question, collection):
     client = _get_gemini_client()
     try:
         response_stream = client.models.generate_content_stream(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 max_output_tokens=512,
@@ -157,7 +157,7 @@ def generate_rag_response(question, collection):
 def generate_conversation_title(question):
     client = _get_gemini_client()
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-2.0-flash",
         contents=(
             "צור כותרת קצרה ומסכמת לשיחה על סמך השאלה הראשונה בלבד. "
             "כתוב בעברית, עד 6 מילים, והחזר את הכותרת בלבד ללא מרכאות או הסבר.\n\n"
