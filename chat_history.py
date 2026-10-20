@@ -24,12 +24,10 @@ def initialize_history(database_path=DATABASE_PATH):
             """
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
-                user_id TEXT,
                 title TEXT NOT NULL DEFAULT 'שיחה חדשה',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE INDEX IF NOT EXISTS conversations_user_id_idx ON conversations(user_id);
 
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +73,7 @@ def initialize_history(database_path=DATABASE_PATH):
         conv_cols = {row[1] for row in connection.execute("PRAGMA table_info(conversations)").fetchall()}
         if "user_id" not in conv_cols:
             connection.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT")
+        connection.execute("CREATE INDEX IF NOT EXISTS conversations_user_id_idx ON conversations(user_id)")
         connection.execute(
             """
             DELETE FROM conversations

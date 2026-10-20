@@ -316,7 +316,8 @@ def login_or_register_google(code: str) -> tuple[str, str] | str:
     return _create_session(uid)
 
 
-def get_bot_preferences(user_id: str) -> dict:    with closing(_connect()) as conn:
+def get_bot_preferences(user_id: str) -> dict:
+    with closing(_connect()) as conn:
         row = conn.execute(
             "SELECT preferred_name, response_length, tone FROM user_preferences WHERE user_id=?",
             (user_id,),
