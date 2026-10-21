@@ -8,6 +8,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 logger = logging.getLogger("fnxdirect.performance")
+logger.setLevel(logging.INFO)
 
 
 @contextmanager

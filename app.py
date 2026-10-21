@@ -16,7 +16,7 @@ import admin_ui
 import auth_ui
 import landing_ui
 from auth_db import init_auth_db, get_bot_preferences
-from assistant_service import create_collection, generate_rag_response
+from assistant_service import create_collection, generate_rag_response, warm_gemini_client
 from performance import timed
 from chat_history import (
     conversation_exists,
@@ -195,6 +195,7 @@ if conversation_owner_id is None:
 # ─── Conversation routing ─────────────────────────────────────────────────────
 requested_conversation_id = st.query_params.get("conversation")
 get_collection_loader()
+warm_gemini_client()
 
 if (
     requested_conversation_id
@@ -397,7 +398,15 @@ if question:
                     sources = []
                     chunk_ids = []
             except RuntimeError as error:
-                answer, sources, chunk_ids, prompt_text = str(error), [], [], ""
+                _PERF_LOGGER.error(
+                    "rag.answer_failed error_type=%s",
+                    type(error).__name__,
+                )
+                if "GEMINI_API_KEY" in str(error):
+                    answer = "שירות יצירת התשובות אינו מוגדר כרגע."
+                else:
+                    answer = "לא הצלחתי להשלים את התשובה. נסו שוב בעוד רגע."
+                sources, chunk_ids, prompt_text = [], [], ""
                 st.markdown(answer)
             except Exception as error:
                 _PERF_LOGGER.error(

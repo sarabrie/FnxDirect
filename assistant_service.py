@@ -1,6 +1,7 @@
 import logging
 import os
 import ssl
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 from urllib.parse import urlsplit
@@ -89,15 +90,47 @@ def create_collection():
     )
 
 
-@st.cache_resource(show_spinner=False)
-def _get_gemini_client():
+def _create_gemini_resources():
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
         raise RuntimeError("חסר GEMINI_API_KEY בקובץ .env.")
-    from google import genai
-
     with timed("model.client_init"):
-        return genai.Client(api_key=gemini_api_key)
+        from google import genai
+        from google.genai import types
+
+        return genai.Client(api_key=gemini_api_key), types
+
+
+def _log_gemini_resources_failure(future):
+    if future.cancelled():
+        return
+    error = future.exception()
+    if error is not None:
+        logging.getLogger("fnxdirect.performance").error(
+            "model.client_init_failed error_type=%s",
+            type(error).__name__,
+        )
+
+
+@st.cache_resource(show_spinner=False)
+def _get_gemini_resources_loader():
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fnxdirect-gemini")
+    future = executor.submit(_create_gemini_resources)
+    future.add_done_callback(_log_gemini_resources_failure)
+    return executor, future
+
+
+def warm_gemini_client():
+    _get_gemini_resources_loader()
+
+
+def _get_gemini_resources():
+    _, future = _get_gemini_resources_loader()
+    try:
+        return future.result()
+    except Exception:
+        _get_gemini_resources_loader.clear()
+        raise
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -105,12 +138,17 @@ def _query_collection_cached(_collection, question, n_results, collection_path):
     return _collection.query(query_texts=[question], n_results=n_results)
 
 
-def _stream_model_response(prompt, config):
+def _stream_model_response(prompt):
+    with timed("rag.model_setup"):
+        client, types = _get_gemini_resources()
+        config = types.GenerateContentConfig(
+            max_output_tokens=512,
+            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+        )
     last_error = None
+    stream_started_at = time.perf_counter()
     for attempt in range(3):
-        client = _get_gemini_client()
         emitted_text = False
-        model_started_at = time.perf_counter()
         try:
             with timed("rag.model"):
                 for chunk in client.models.generate_content_stream(
@@ -125,7 +163,7 @@ def _stream_model_response(prompt, config):
                         emitted_text = True
                         logging.getLogger("fnxdirect.performance").info(
                             "performance phase=rag.model_first_token duration_ms=%.2f",
-                            (time.perf_counter() - model_started_at) * 1000,
+                            (time.perf_counter() - stream_started_at) * 1000,
                         )
                     yield text
             if not emitted_text:
@@ -135,7 +173,8 @@ def _stream_model_response(prompt, config):
             last_error = error
             retryable = "503" in str(error) or "UNAVAILABLE" in str(error)
             if retryable and not emitted_text and attempt < 2:
-                time.sleep(3)
+                with timed("rag.model_retry_wait"):
+                    time.sleep(3)
                 continue
             logging.getLogger("fnxdirect.performance").error(
                 "rag.stream_failed error_type=%s",
@@ -147,8 +186,6 @@ def _stream_model_response(prompt, config):
 
 def generate_rag_response(question, collection, user_prefs=None):
     """Returns (answer_text, sources, chunk_ids, prompt_text)."""
-    from google.genai import types
-
     with timed("rag.retrieval"):
         result_count = min(10, collection.count())
         if result_count == 0:
@@ -206,6 +243,7 @@ def generate_rag_response(question, collection, user_prefs=None):
     if not context_text:
         return "זה לא כתוב באתר הפניקס.", [], [], ""
 
+    prompt_started_at = time.perf_counter()
     prefs = user_prefs or {}
     preferred_name = prefs.get("preferred_name")
     response_length = prefs.get("response_length", "standard")
@@ -241,16 +279,15 @@ def generate_rag_response(question, collection, user_prefs=None):
 שאלה: {question}
 """
 
-    config = types.GenerateContentConfig(
-        max_output_tokens=512,
-        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+    logging.getLogger("fnxdirect.performance").info(
+        "performance phase=rag.prompt_assembly duration_ms=%.2f",
+        (time.perf_counter() - prompt_started_at) * 1000,
     )
-
-    return _stream_model_response(prompt, config), sources, chunk_ids, prompt
+    return _stream_model_response(prompt), sources, chunk_ids, prompt
 
 
 def generate_conversation_title(question):
-    client = _get_gemini_client()
+    client, _ = _get_gemini_resources()
     response = client.models.generate_content(
         model="gemini-3.8-flash",
         contents=(
