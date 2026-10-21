@@ -24,10 +24,7 @@ httpx.AsyncClient.__init__ = _patched_async_init
 # ─────────────────────────────────────────────────────────────────────────────
 
 from dotenv import load_dotenv
-import chromadb
-from google import genai
-from google.genai import types
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+import streamlit as st
 from chat_history import get_chunk_score
 from performance import timed
 
@@ -79,6 +76,9 @@ def _is_generic_homepage_url(url):
 
 
 def create_collection():
+    import chromadb
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
     chroma_client = chromadb.PersistentClient(path=DB_PATH)
     return chroma_client.get_collection(
         name="fnx_website_chunks_multilingual",
@@ -88,15 +88,21 @@ def create_collection():
     )
 
 
+@st.cache_resource(show_spinner=False)
 def _get_gemini_client():
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
         raise RuntimeError("חסר GEMINI_API_KEY בקובץ .env.")
-    return genai.Client(api_key=gemini_api_key)
+    from google import genai
+
+    with timed("model.client_init"):
+        return genai.Client(api_key=gemini_api_key)
 
 
 def generate_rag_response(question, collection, user_prefs=None):
     """Returns (answer_text, sources, chunk_ids, prompt_text)."""
+    from google.genai import types
+
     with timed("rag.retrieval"):
         result_count = min(10, collection.count())
         if result_count == 0:
@@ -192,11 +198,9 @@ def generate_rag_response(question, collection, user_prefs=None):
                 response = client.models.generate_content(
                     model="gemini-3.8-flash", contents=prompt, config=config
                 )
-            client.close()
             answer = response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
             return answer, sources, chunk_ids, prompt
         except Exception as e:
-            client.close()
             last_error = e
             if "503" in str(e) or "UNAVAILABLE" in str(e):
                 time.sleep(3)
@@ -207,14 +211,15 @@ def generate_rag_response(question, collection, user_prefs=None):
 
 def generate_conversation_title(question):
     client = _get_gemini_client()
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=(
-            "צור כותרת קצרה ומסכמת לשיחה על סמך השאלה הראשונה בלבד. "
-            "כתוב בעברית, עד 6 מילים, והחזר את הכותרת בלבד ללא מרכאות או הסבר.\n\n"
-            f"שאלה: {question}"
-        ),
-    )
+    with timed("rag.title_model"):
+        response = client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents=(
+                "צור כותרת קצרה ומסכמת לשיחה על סמך השאלה הראשונה בלבד. "
+                "כתוב בעברית, עד 6 מילים, והחזר את הכותרת בלבד ללא מרכאות או הסבר.\n\n"
+                f"שאלה: {question}"
+            ),
+        )
 
     title = " ".join((response.text or "").split()).strip(" \"'״׳")
     if not title:

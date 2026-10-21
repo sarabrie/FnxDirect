@@ -125,14 +125,24 @@ def get_collection():
     return create_collection()
 
 
+@st.cache_data(ttl=15, show_spinner=False)
+def get_cached_conversations(user_id, search_query):
+    return list_conversations(user_id=user_id, search_query=search_query)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_cached_bot_preferences(user_id):
+    return get_bot_preferences(user_id)
+
+
 # ─── Header ──────────────────────────────────────────────────────────────────
 app_ui.render_header(user)
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 search_key = f"history_search_{conversation_owner_id}"
-conversations = list_conversations(
-    user_id=conversation_owner_id,
-    search_query=st.session_state.get(search_key, ""),
+conversations = get_cached_conversations(
+    conversation_owner_id,
+    st.session_state.get(search_key, ""),
 )
 sidebar_result = app_ui.render_sidebar(conversations, user, conversation_owner_id)
 sidebar_action, _ = sidebar_result
@@ -157,6 +167,7 @@ if sidebar_action:
             title,
             user_id=conversation_owner_id,
         ):
+            get_cached_conversations.clear()
             st.session_state.pop("editing_conversation_id", None)
         else:
             st.error("לא ניתן לערוך את הכותרת של השיחה הזו.")
@@ -165,6 +176,7 @@ if sidebar_action:
             selected_conversation_id,
             user_id=conversation_owner_id,
         ):
+            get_cached_conversations.clear()
             st.session_state.pop("deleting_conversation_id", None)
             if selected_conversation_id == conversation_id:
                 conversation_id = new_conversation_id()
@@ -184,6 +196,7 @@ if st.session_state.get("show_preferences") and user:
     def _on_prefs_save(new_prefs):
         st.session_state["user_prefs"] = new_prefs
         st.session_state["show_preferences"] = False
+        get_cached_bot_preferences.clear()
 
     app_ui.render_preferences_panel(user, on_save=_on_prefs_save)
     st.stop()
@@ -191,7 +204,7 @@ if st.session_state.get("show_preferences") and user:
 # ─── Load user prefs (cached in session) ─────────────────────────────────────
 if user and "user_prefs" not in st.session_state:
     with timed("app.load_preferences"):
-        st.session_state["user_prefs"] = get_bot_preferences(user["sub"])
+        st.session_state["user_prefs"] = get_cached_bot_preferences(user["sub"])
 
 user_prefs = st.session_state.get("user_prefs") if user else None
 
@@ -261,6 +274,7 @@ if question:
         question,
         user_id=conversation_owner_id,
     )
+    get_cached_conversations.clear()
 
     with st.chat_message("assistant"):
         with st.spinner("מחפש מידע באתר הפניקס..."):
@@ -297,6 +311,7 @@ if question:
         chunk_ids=chunk_ids, prompt_text=prompt_text,
         user_id=conversation_owner_id,
     )
+    get_cached_conversations.clear()
     st.session_state.messages.append({
         "role": "assistant",
         "content": answer,
