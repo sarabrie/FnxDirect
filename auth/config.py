@@ -13,7 +13,7 @@ class Settings:
     ACCESS_TOKEN_TTL_SECONDS: int = 15 * 60             # 15 min
     REFRESH_TOKEN_TTL_DAYS: int = 30
     BCRYPT_ROUNDS: int = 12
-    GOOGLE_CLIENT_ID: str = os.environ["GOOGLE_CLIENT_ID"]
+    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     CSRF_SECRET: str = os.environ["CSRF_SECRET"]        # min 32 random bytes
     COOKIE_SECURE: bool = os.getenv("COOKIE_SECURE", "true").lower() == "true"
     DB_POOL_MIN: int = int(os.getenv("DB_POOL_MIN", "2"))

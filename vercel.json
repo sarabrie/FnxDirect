@@ -1,0 +1,41 @@
+{
+  "services": {
+    "auth": {
+      "root": ".",
+      "framework": "fastapi",
+      "entrypoint": "auth.main:app",
+      "installCommand": "pip install -r auth/requirements.txt"
+    },
+    "web": {
+      "root": ".",
+      "runtime": "container",
+      "entrypoint": "Dockerfile.vercel"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/auth/(.*)",
+      "destination": {
+        "service": "auth"
+      }
+    },
+    {
+      "source": "/users/(.*)",
+      "destination": {
+        "service": "auth"
+      }
+    },
+    {
+      "source": "/health",
+      "destination": {
+        "service": "auth"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "web"
+      }
+    }
+  ]
+}
