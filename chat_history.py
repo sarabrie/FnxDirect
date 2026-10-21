@@ -37,6 +37,8 @@ def initialize_history(database_path=DATABASE_PATH):
                 sources_json TEXT NOT NULL DEFAULT '[]',
                 chunk_ids_json TEXT NOT NULL DEFAULT '[]',
                 prompt_text TEXT,
+                follow_up_question TEXT,
+                follow_up_questions_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -77,6 +79,12 @@ def initialize_history(database_path=DATABASE_PATH):
             connection.execute("ALTER TABLE messages ADD COLUMN chunk_ids_json TEXT NOT NULL DEFAULT '[]'")
         if "prompt_text" not in existing_cols:
             connection.execute("ALTER TABLE messages ADD COLUMN prompt_text TEXT")
+        if "follow_up_question" not in existing_cols:
+            connection.execute("ALTER TABLE messages ADD COLUMN follow_up_question TEXT")
+        if "follow_up_questions_json" not in existing_cols:
+            connection.execute(
+                "ALTER TABLE messages ADD COLUMN follow_up_questions_json TEXT NOT NULL DEFAULT '[]'"
+            )
         conv_cols = {row[1] for row in connection.execute("PRAGMA table_info(conversations)").fetchall()}
         if "user_id" not in conv_cols:
             connection.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT")
@@ -178,7 +186,7 @@ def load_messages(conversation_id, database_path=DATABASE_PATH, user_id=None):
     with closing(_connect(database_path)) as connection:
         rows = connection.execute(
             """
-            SELECT id, role, content, sources_json
+            SELECT id, role, content, sources_json, follow_up_question, follow_up_questions_json
             FROM messages
             WHERE conversation_id = ?
               AND EXISTS (
@@ -195,15 +203,24 @@ def load_messages(conversation_id, database_path=DATABASE_PATH, user_id=None):
             """,
             (conversation_id, user_id, owner_key),
         ).fetchall()
-    return [
-        {
+    messages = []
+    for row in rows:
+        try:
+            follow_up_questions = json.loads(row["follow_up_questions_json"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            follow_up_questions = []
+        if not isinstance(follow_up_questions, list):
+            follow_up_questions = []
+        if not follow_up_questions and row["follow_up_question"]:
+            follow_up_questions = [row["follow_up_question"]]
+        messages.append({
             "role": row["role"],
             "content": row["content"],
             "sources": json.loads(row["sources_json"]),
+            "follow_up_questions": follow_up_questions,
             "message_id": row["id"] if row["role"] == "assistant" else None,
-        }
-        for row in rows
-    ]
+        })
+    return messages
 
 
 def save_message(
@@ -215,10 +232,18 @@ def save_message(
     conversation_title=None,
     chunk_ids=None,
     prompt_text=None,
+    follow_up_question=None,
+    follow_up_questions=None,
     user_id=None,
 ):
     sources_json = json.dumps(sources or [], ensure_ascii=False)
     chunk_ids_json = json.dumps(chunk_ids or [], ensure_ascii=False)
+    if follow_up_questions is None:
+        follow_up_questions = [follow_up_question] if follow_up_question else []
+    follow_up_questions_json = json.dumps(
+        [item for item in follow_up_questions if isinstance(item, str) and item.strip()],
+        ensure_ascii=False,
+    )
     title = " ".join((conversation_title or content).split())[:48]
     with closing(_connect(database_path)) as connection:
         with connection:
@@ -243,10 +268,18 @@ def save_message(
                 raise ValueError("השיחה הוסרה מההיסטוריה.")
             cursor = connection.execute(
                 """
-                INSERT INTO messages (conversation_id, role, content, sources_json, chunk_ids_json, prompt_text)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO messages (
+                    conversation_id, role, content, sources_json,
+                    chunk_ids_json, prompt_text, follow_up_question,
+                    follow_up_questions_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (conversation_id, role, content, sources_json, chunk_ids_json, prompt_text),
+                (
+                    conversation_id, role, content, sources_json,
+                    chunk_ids_json, prompt_text, follow_up_question,
+                    follow_up_questions_json,
+                ),
             )
             connection.execute(
                 """
