@@ -10,6 +10,7 @@ def get_connection_pool() -> pool.ThreadedConnectionPool:
         minconn=1,
         maxconn=10,
         dsn=os.environ["DATABASE_URL"],
+        connect_timeout=10,
     )
 
 

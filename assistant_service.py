@@ -1,3 +1,4 @@
+import logging
 import os
 import ssl
 from pathlib import Path
@@ -99,6 +100,51 @@ def _get_gemini_client():
         return genai.Client(api_key=gemini_api_key)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _query_collection_cached(_collection, question, n_results, collection_path):
+    return _collection.query(query_texts=[question], n_results=n_results)
+
+
+def _stream_model_response(prompt, config):
+    last_error = None
+    for attempt in range(3):
+        client = _get_gemini_client()
+        emitted_text = False
+        model_started_at = time.perf_counter()
+        try:
+            with timed("rag.model"):
+                for chunk in client.models.generate_content_stream(
+                    model="gemini-3.8-flash",
+                    contents=prompt,
+                    config=config,
+                ):
+                    text = chunk.text
+                    if not text:
+                        continue
+                    if not emitted_text:
+                        emitted_text = True
+                        logging.getLogger("fnxdirect.performance").info(
+                            "performance phase=rag.model_first_token duration_ms=%.2f",
+                            (time.perf_counter() - model_started_at) * 1000,
+                        )
+                    yield text
+            if not emitted_text:
+                yield "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
+            return
+        except Exception as error:
+            last_error = error
+            retryable = "503" in str(error) or "UNAVAILABLE" in str(error)
+            if retryable and not emitted_text and attempt < 2:
+                time.sleep(3)
+                continue
+            logging.getLogger("fnxdirect.performance").error(
+                "rag.stream_failed error_type=%s",
+                type(error).__name__,
+            )
+            raise
+    raise last_error
+
+
 def generate_rag_response(question, collection, user_prefs=None):
     """Returns (answer_text, sources, chunk_ids, prompt_text)."""
     from google.genai import types
@@ -108,7 +154,12 @@ def generate_rag_response(question, collection, user_prefs=None):
         if result_count == 0:
             return "זה לא כתוב באתר הפניקס.", [], [], ""
 
-        results = collection.query(query_texts=[question], n_results=result_count)
+        results = _query_collection_cached(
+            collection,
+            question,
+            result_count,
+            DB_PATH,
+        )
 
     documents = results.get("documents", [[]])[0]
     metadatas = results.get("metadatas", [[]])[0]
@@ -195,36 +246,19 @@ def generate_rag_response(question, collection, user_prefs=None):
         thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
     )
 
-    last_error = None
-    for attempt in range(3):
-        client = _get_gemini_client()
-        try:
-            with timed("rag.model"):
-                response = client.models.generate_content(
-                    model="gemini-3.8-flash", contents=prompt, config=config
-                )
-            answer = response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
-            return answer, sources, chunk_ids, prompt
-        except Exception as e:
-            last_error = e
-            if "503" in str(e) or "UNAVAILABLE" in str(e):
-                time.sleep(3)
-                continue
-            raise
-    raise last_error
+    return _stream_model_response(prompt, config), sources, chunk_ids, prompt
 
 
 def generate_conversation_title(question):
     client = _get_gemini_client()
-    with timed("rag.title_model"):
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=(
-                "צור כותרת קצרה ומסכמת לשיחה על סמך השאלה הראשונה בלבד. "
-                "כתוב בעברית, עד 6 מילים, והחזר את הכותרת בלבד ללא מרכאות או הסבר.\n\n"
-                f"שאלה: {question}"
-            ),
-        )
+    response = client.models.generate_content(
+        model="gemini-3.8-flash",
+        contents=(
+            "צור כותרת קצרה ומסכמת לשיחה על סמך השאלה הראשונה בלבד. "
+            "כתוב בעברית, עד 6 מילים, והחזר את הכותרת בלבד ללא מרכאות או הסבר.\n\n"
+            f"שאלה: {question}"
+        ),
+    )
 
     title = " ".join((response.text or "").split()).strip(" \"'״׳")
     if not title:

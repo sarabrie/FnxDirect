@@ -283,6 +283,10 @@ def render_messages(messages, on_feedback=None):
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
                 st.markdown(message["content"])
+                if message.get("_write_id"):
+                    st.caption("שומר את התשובה...")
+                if message.get("_write_error"):
+                    st.warning("התשובה לא נשמרה בהיסטוריה.")
                 render_sources(message.get("sources"))
                 if on_feedback and message.get("message_id"):
                     render_feedback_buttons(message["message_id"], idx)

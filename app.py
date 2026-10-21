@@ -1,5 +1,7 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
+from uuid import uuid4
 
 _APP_STARTED_AT = perf_counter()
 _PERF_LOGGER = logging.getLogger("fnxdirect.performance")
@@ -36,6 +38,108 @@ _PERF_LOGGER.info(
     (perf_counter() - _APP_STARTED_AT) * 1000,
 )
 
+@st.cache_resource
+def get_collection_loader():
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fnxdirect-rag")
+    started_at = perf_counter()
+    future = executor.submit(_load_collection, started_at)
+    return executor, future
+
+
+def _load_collection(started_at):
+    try:
+        return create_collection()
+    except Exception as error:
+        _PERF_LOGGER.error(
+            "collection_load_failed error_type=%s",
+            type(error).__name__,
+        )
+        raise
+    finally:
+        _PERF_LOGGER.info(
+            "performance phase=app.load_collection duration_ms=%.2f",
+            (perf_counter() - started_at) * 1000,
+        )
+        _PERF_LOGGER.info(
+            "performance phase=app.startup_to_collection duration_ms=%.2f",
+            (perf_counter() - _APP_STARTED_AT) * 1000,
+        )
+
+
+def get_collection():
+    _, future = get_collection_loader()
+    try:
+        return future.result()
+    except Exception:
+        get_collection_loader.clear()
+        raise
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def get_cached_conversations(user_id, search_query):
+    return list_conversations(user_id=user_id, search_query=search_query)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_cached_bot_preferences(user_id):
+    return get_bot_preferences(user_id)
+
+
+@st.cache_resource(show_spinner=False)
+def get_db_write_executor():
+    return ThreadPoolExecutor(max_workers=1, thread_name_prefix="fnxdirect-db")
+
+
+def queue_db_write(operation, function, *args, message_write_id=None, **kwargs):
+    future = get_db_write_executor().submit(function, *args, **kwargs)
+    pending_writes = st.session_state.setdefault("_pending_db_writes", {})
+    pending_writes[uuid4().hex] = {
+        "future": future,
+        "operation": operation,
+        "message_write_id": message_write_id,
+    }
+
+
+def resolve_pending_db_writes():
+    pending_writes = st.session_state.get("_pending_db_writes", {})
+    remaining_writes = {}
+    errors = []
+    for write_id, pending in pending_writes.items():
+        future = pending["future"]
+        if not future.done():
+            remaining_writes[write_id] = pending
+            continue
+
+        message_write_id = pending["message_write_id"]
+        try:
+            result = future.result()
+        except Exception as error:
+            _PERF_LOGGER.error(
+                "background_db_write_failed operation=%s error_type=%s",
+                pending["operation"],
+                type(error).__name__,
+            )
+            errors.append("שמירת מידע נכשלה. אפשר לנסות שוב בעוד רגע.")
+            if message_write_id:
+                for message in st.session_state.get("messages", []):
+                    if message.get("_write_id") == message_write_id:
+                        message.pop("_write_id", None)
+                        message["_write_error"] = True
+                        break
+        else:
+            if message_write_id:
+                for message in st.session_state.get("messages", []):
+                    if message.get("_write_id") == message_write_id:
+                        message.pop("_write_id", None)
+                        message["message_id"] = result
+                        break
+            if pending["operation"] == "assistant_message":
+                get_cached_conversations.clear()
+
+    st.session_state["_pending_db_writes"] = remaining_writes
+    return errors
+
+
 load_dotenv()
 
 st.set_page_config(
@@ -43,6 +147,8 @@ st.set_page_config(
     page_icon="✳",
     layout="centered",
 )
+
+_background_write_errors = resolve_pending_db_writes()
 
 with timed("app.initialize_auth_db"):
     init_auth_db()
@@ -88,6 +194,8 @@ if conversation_owner_id is None:
 
 # ─── Conversation routing ─────────────────────────────────────────────────────
 requested_conversation_id = st.query_params.get("conversation")
+get_collection_loader()
+
 if (
     requested_conversation_id
     and (
@@ -122,25 +230,10 @@ if (
         limit=MESSAGE_PAGE_SIZE,
     )
     st.session_state["has_older_messages"] = has_older_messages
-
-
-@st.cache_resource
-def get_collection():
-    return create_collection()
-
-
-@st.cache_data(ttl=15, show_spinner=False)
-def get_cached_conversations(user_id, search_query):
-    return list_conversations(user_id=user_id, search_query=search_query)
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def get_cached_bot_preferences(user_id):
-    return get_bot_preferences(user_id)
-
-
 # ─── Header ──────────────────────────────────────────────────────────────────
 app_ui.render_header(user)
+for _write_error in _background_write_errors:
+    st.error(_write_error)
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 search_key = f"history_search_{conversation_owner_id}"
@@ -214,24 +307,6 @@ if user and "user_prefs" not in st.session_state:
 
 user_prefs = st.session_state.get("user_prefs") if user else None
 
-# ─── Collection load ──────────────────────────────────────────────────────────
-try:
-    _collection_load_started_at = perf_counter()
-    with st.spinner("מכין את עוזר החיפוש. הטעינה הראשונה עשויה להימשך כחצי דקה..."):
-        collection = get_collection()
-    _PERF_LOGGER.info(
-        "performance phase=app.load_collection duration_ms=%.2f",
-        (perf_counter() - _collection_load_started_at) * 1000,
-    )
-    _PERF_LOGGER.info(
-        "performance phase=app.startup_to_collection duration_ms=%.2f",
-        (perf_counter() - _APP_STARTED_AT) * 1000,
-    )
-except Exception as error:
-    print(f"שגיאה בטעינת מסד המידע: {type(error).__name__}: {error}")
-    st.error("לא הצלחתי לטעון את מודל החיפוש. בדקו את חיבור האינטרנט ונסו להפעיל מחדש.")
-    st.stop()
-
 # ─── Flush pending feedback ───────────────────────────────────────────────────
 for msg in st.session_state.messages:
     mid = msg.get("message_id")
@@ -240,7 +315,9 @@ for msg in st.session_state.messages:
     pending_key = f"fb_submit_{mid}"
     if pending_key in st.session_state:
         fb = st.session_state.pop(pending_key)
-        save_feedback(
+        queue_db_write(
+            "feedback",
+            save_feedback,
             message_id=mid,
             conversation_id=conversation_id,
             user_id=user["sub"] if user else None,
@@ -251,7 +328,9 @@ for msg in st.session_state.messages:
 
 # ─── Chat ─────────────────────────────────────────────────────────────────────
 def _on_feedback(message_id, rating, reasons, comment):
-    save_feedback(
+    queue_db_write(
+        "feedback",
+        save_feedback,
         message_id=message_id,
         conversation_id=conversation_id,
         user_id=user["sub"] if user else None,
@@ -286,20 +365,26 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    save_message(
+    user_message_future = get_db_write_executor().submit(
+        save_message,
         conversation_id,
         "user",
         question,
         user_id=conversation_owner_id,
     )
-    get_cached_conversations.clear()
+    user_message_saved = False
 
     with st.chat_message("assistant"):
         with st.spinner("מחפש מידע באתר הפניקס..."):
             try:
+                with st.spinner("מכין את עוזר החיפוש..."):
+                    with timed("app.wait_for_collection"):
+                        collection = get_collection()
                 response, sources, chunk_ids, prompt_text = generate_rag_response(
                     question, collection, user_prefs=user_prefs
                 )
+                user_message_future.result()
+                user_message_saved = True
                 if isinstance(response, str):
                     answer = response
                     st.markdown(answer)
@@ -315,25 +400,55 @@ if question:
                 answer, sources, chunk_ids, prompt_text = str(error), [], [], ""
                 st.markdown(answer)
             except Exception as error:
-                print(f"שגיאה ביצירת תשובה: {type(error).__name__}: {error}")
+                _PERF_LOGGER.error(
+                    "rag.answer_failed error_type=%s",
+                    type(error).__name__,
+                )
                 if getattr(error, "code", None) == 429 or "429" in str(error) or "RESOURCE_EXHAUSTED" in str(error):
                     answer = "מכסת השימוש ב-Gemini הסתיימה. נסו שוב לאחר איפוס המכסה."
                 else:
-                    answer = f"שגיאה: {type(error).__name__}: {error}"
+                    answer = "לא הצלחתי להשלים את התשובה. נסו שוב בעוד רגע."
                 sources, chunk_ids, prompt_text = [], [], ""
                 st.markdown(answer)
+            finally:
+                if not user_message_saved:
+                    try:
+                        user_message_future.result()
+                        user_message_saved = True
+                    except Exception as error:
+                        _PERF_LOGGER.error(
+                            "background_db_write_failed operation=user_message error_type=%s",
+                            type(error).__name__,
+                        )
+                        answer = "לא הצלחתי לשמור את השאלה. נסו לשלוח אותה שוב."
+                        sources, chunk_ids, prompt_text = [], [], ""
+                        st.error(answer)
+                if user_message_saved:
+                    get_cached_conversations.clear()
             app_ui.render_sources(sources)
 
-    message_id = save_message(
-        conversation_id, "assistant", answer, sources,
-        chunk_ids=chunk_ids, prompt_text=prompt_text,
-        user_id=conversation_owner_id,
-    )
+    client_write_id = uuid4().hex if user_message_saved else None
+    if user_message_saved:
+        queue_db_write(
+            "assistant_message",
+            save_message,
+            conversation_id,
+            "assistant",
+            answer,
+            sources,
+            chunk_ids=chunk_ids,
+            prompt_text=prompt_text,
+            user_id=conversation_owner_id,
+            message_write_id=client_write_id,
+        )
     get_cached_conversations.clear()
-    st.session_state.messages.append({
+    assistant_message = {
         "role": "assistant",
         "content": answer,
         "sources": sources,
-        "message_id": message_id,
-    })
+        "message_id": None,
+    }
+    if client_write_id:
+        assistant_message["_write_id"] = client_write_id
+    st.session_state.messages.append(assistant_message)
     st.rerun()
