@@ -29,6 +29,7 @@ from google import genai
 from google.genai import types
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from chat_history import get_chunk_score
+from performance import timed
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
@@ -96,11 +97,13 @@ def _get_gemini_client():
 
 def generate_rag_response(question, collection, user_prefs=None):
     """Returns (answer_text, sources, chunk_ids, prompt_text)."""
-    result_count = min(10, collection.count())
-    if result_count == 0:
-        return "זה לא כתוב באתר הפניקס.", [], [], ""
+    with timed("rag.retrieval"):
+        result_count = min(10, collection.count())
+        if result_count == 0:
+            return "זה לא כתוב באתר הפניקס.", [], [], ""
 
-    results = collection.query(query_texts=[question], n_results=result_count)
+        results = collection.query(query_texts=[question], n_results=result_count)
+
     documents = results.get("documents", [[]])[0]
     metadatas = results.get("metadatas", [[]])[0]
     ids = results.get("ids", [[]])[0]
@@ -112,30 +115,31 @@ def generate_rag_response(question, collection, user_prefs=None):
     sources = []
     chunk_ids = []
     scored = []
-    for document, metadata, chunk_id in zip(documents, metadatas, ids):
-        if not isinstance(document, str) or not document.strip():
-            continue
-        if not isinstance(metadata, dict):
-            metadata = {}
-        if _is_generic_homepage_url(metadata.get("url")):
-            continue
-        scored.append((get_chunk_score(chunk_id), chunk_id, document, metadata))
+    with timed("rag.rerank"):
+        for document, metadata, chunk_id in zip(documents, metadatas, ids):
+            if not isinstance(document, str) or not document.strip():
+                continue
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if _is_generic_homepage_url(metadata.get("url")):
+                continue
+            scored.append((get_chunk_score(chunk_id), chunk_id, document, metadata))
 
-    # Re-rank: penalised chunks sink to the bottom, still included for transparency
-    scored.sort(key=lambda x: x[0], reverse=True)
+        # Re-rank: penalised chunks sink to the bottom, still included for transparency
+        scored.sort(key=lambda x: x[0], reverse=True)
 
-    for _, chunk_id, document, metadata in scored:
-        title = metadata.get("title")
-        if title:
-            context_text += f"- עמוד: {title}\n  קטע: {document}\n"
-        else:
-            context_text += f"- {document}\n"
-        sources.append({
-            "snippet": document,
-            "url": _source_url(metadata),
-            "title": title if isinstance(title, str) else None,
-        })
-        chunk_ids.append(chunk_id)
+        for _, chunk_id, document, metadata in scored:
+            title = metadata.get("title")
+            if title:
+                context_text += f"- עמוד: {title}\n  קטע: {document}\n"
+            else:
+                context_text += f"- {document}\n"
+            sources.append({
+                "snippet": document,
+                "url": _source_url(metadata),
+                "title": title if isinstance(title, str) else None,
+            })
+            chunk_ids.append(chunk_id)
 
     if not context_text:
         return "זה לא כתוב באתר הפניקס.", [], [], ""
@@ -184,9 +188,10 @@ def generate_rag_response(question, collection, user_prefs=None):
     for attempt in range(3):
         client = _get_gemini_client()
         try:
-            response = client.models.generate_content(
-                model="gemini-3.8-flash", contents=prompt, config=config
-            )
+            with timed("rag.model"):
+                response = client.models.generate_content(
+                    model="gemini-3.8-flash", contents=prompt, config=config
+                )
             client.close()
             answer = response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
             return answer, sources, chunk_ids, prompt

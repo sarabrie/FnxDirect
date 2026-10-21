@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from performance import timed_function
 
 # Kept for compatibility with existing function signatures; PostgreSQL uses DATABASE_URL.
 DATABASE_PATH = Path(
@@ -34,6 +35,7 @@ def new_conversation_id():
     return str(uuid4())
 
 
+@timed_function("db.conversation_exists")
 def conversation_exists(conversation_id, database_path=DATABASE_PATH, user_id=None):
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
@@ -52,6 +54,7 @@ def conversation_exists(conversation_id, database_path=DATABASE_PATH, user_id=No
     return row is not None
 
 
+@timed_function("db.conversation_is_hidden")
 def conversation_is_hidden(conversation_id, database_path=DATABASE_PATH, user_id=None):
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
@@ -65,6 +68,7 @@ def conversation_is_hidden(conversation_id, database_path=DATABASE_PATH, user_id
     return row is not None
 
 
+@timed_function("db.list_conversations")
 def list_conversations(
     limit=20,
     database_path=DATABASE_PATH,
@@ -110,6 +114,7 @@ def list_conversations(
     return [dict(row) for row in rows]
 
 
+@timed_function("db.load_messages")
 def load_messages(conversation_id, database_path=DATABASE_PATH, user_id=None):
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
@@ -143,6 +148,7 @@ def load_messages(conversation_id, database_path=DATABASE_PATH, user_id=None):
     ]
 
 
+@timed_function("db.save_message")
 def save_message(
     conversation_id,
     role,
@@ -203,6 +209,7 @@ def save_message(
     return message_id
 
 
+@timed_function("db.rename_conversation")
 def rename_conversation(
     conversation_id,
     title,
@@ -236,6 +243,7 @@ def rename_conversation(
     return cursor.rowcount == 1
 
 
+@timed_function("db.hide_conversation")
 def hide_conversation(conversation_id, database_path=DATABASE_PATH, user_id=None):
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
@@ -263,6 +271,7 @@ def get_last_message_id(conversation_id, role="assistant", database_path=DATABAS
     return row["id"] if row else None
 
 
+@timed_function("db.save_feedback")
 def save_feedback(message_id, conversation_id, user_id, rating, reasons, comment, database_path=DATABASE_PATH):
     reasons_json = json.dumps(reasons or [], ensure_ascii=False)
     with closing(_connect(database_path)) as connection:
@@ -304,6 +313,7 @@ def save_feedback(message_id, conversation_id, user_id, rating, reasons, comment
         connection.commit()
 
 
+@timed_function("db.get_chunk_score")
 def get_chunk_score(chunk_id, database_path=DATABASE_PATH):
     with closing(_connect(database_path)) as connection:
         row = _execute(connection,
@@ -312,6 +322,7 @@ def get_chunk_score(chunk_id, database_path=DATABASE_PATH):
     return row["score"] if row else 1.0
 
 
+@timed_function("db.get_negative_feedback")
 def get_negative_feedback(limit=50, database_path=DATABASE_PATH):
     with closing(_connect(database_path)) as connection:
         rows = _execute(connection,

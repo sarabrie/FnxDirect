@@ -1,3 +1,9 @@
+import logging
+from time import perf_counter
+
+_APP_STARTED_AT = perf_counter()
+_PERF_LOGGER = logging.getLogger("fnxdirect.performance")
+
 import os
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
@@ -9,6 +15,7 @@ import auth_ui
 import landing_ui
 from auth_db import init_auth_db, get_bot_preferences
 from assistant_service import create_collection, generate_rag_response
+from performance import timed
 from chat_history import (
     conversation_exists,
     conversation_is_hidden,
@@ -22,6 +29,11 @@ from chat_history import (
     save_feedback,
 )
 
+_PERF_LOGGER.info(
+    "performance phase=app.import duration_ms=%.2f",
+    (perf_counter() - _APP_STARTED_AT) * 1000,
+)
+
 load_dotenv()
 
 st.set_page_config(
@@ -30,8 +42,10 @@ st.set_page_config(
     layout="centered",
 )
 
-init_auth_db()
-initialize_history()
+with timed("app.initialize_auth_db"):
+    init_auth_db()
+with timed("app.initialize_history"):
+    initialize_history()
 
 # ─── Admin panel ──────────────────────────────────────────────────────────────
 if st.query_params.get("admin") == "1":
@@ -176,14 +190,24 @@ if st.session_state.get("show_preferences") and user:
 
 # ─── Load user prefs (cached in session) ─────────────────────────────────────
 if user and "user_prefs" not in st.session_state:
-    st.session_state["user_prefs"] = get_bot_preferences(user["sub"])
+    with timed("app.load_preferences"):
+        st.session_state["user_prefs"] = get_bot_preferences(user["sub"])
 
 user_prefs = st.session_state.get("user_prefs") if user else None
 
 # ─── Collection load ──────────────────────────────────────────────────────────
 try:
+    _collection_load_started_at = perf_counter()
     with st.spinner("מכין את עוזר החיפוש. הטעינה הראשונה עשויה להימשך כחצי דקה..."):
         collection = get_collection()
+    _PERF_LOGGER.info(
+        "performance phase=app.load_collection duration_ms=%.2f",
+        (perf_counter() - _collection_load_started_at) * 1000,
+    )
+    _PERF_LOGGER.info(
+        "performance phase=app.startup_to_collection duration_ms=%.2f",
+        (perf_counter() - _APP_STARTED_AT) * 1000,
+    )
 except Exception as error:
     print(f"שגיאה בטעינת מסד המידע: {type(error).__name__}: {error}")
     st.error("לא הצלחתי לטעון את מודל החיפוש. בדקו את חיבור האינטרנט ונסו להפעיל מחדש.")

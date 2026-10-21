@@ -14,6 +14,7 @@ import bcrypt
 import jwt
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from performance import timed_function
 
 JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))  # stable only if set in .env
 JWT_ALGORITHM = "HS256"
@@ -309,6 +310,7 @@ def login_or_register_google(code: str) -> tuple[str, str] | str:
     return _create_session(uid)
 
 
+@timed_function("db.get_bot_preferences")
 def get_bot_preferences(user_id: str) -> dict:
     with closing(_connect()) as conn:
         row = _execute(
@@ -321,6 +323,7 @@ def get_bot_preferences(user_id: str) -> dict:
     return {"preferred_name": None, "response_length": "standard", "tone": "simple"}
 
 
+@timed_function("db.save_bot_preferences")
 def save_bot_preferences(user_id: str, preferred_name: str | None, response_length: str, tone: str) -> None:
     with closing(_connect()) as conn:
         with conn:
