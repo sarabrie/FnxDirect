@@ -17,6 +17,9 @@ already-downloaded model when the first question is submitted.
 
 The ChromaDB index is mounted from `fnx_db` and the conversation history is stored
 in the `chat_history_data` Docker volume. Both persist when the container restarts.
+Users can search their conversation history, rename conversations, and hide them
+from their personal history. Hiding a conversation does not remove its records
+from the conversation database.
 
 To refresh the website index, set `FIRE_CRAWL_API_KEY` in `.env`, then run:
 

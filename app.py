@@ -11,10 +11,13 @@ from auth_db import init_auth_db, get_bot_preferences
 from assistant_service import create_collection, generate_rag_response
 from chat_history import (
     conversation_exists,
+    conversation_is_hidden,
+    hide_conversation,
     initialize_history,
     list_conversations,
     load_messages,
     new_conversation_id,
+    rename_conversation,
     save_message,
     save_feedback,
 )
@@ -61,14 +64,29 @@ if not st.session_state.get("landing_done"):
 
 # ─── Auth state ───────────────────────────────────────────────────────────────
 user = auth_ui.get_current_user()
+user_id = user["sub"] if user else None
+conversation_owner_id = user_id
+if conversation_owner_id is None:
+    guest_id = st.session_state.setdefault("guest_id", new_conversation_id())
+    conversation_owner_id = f"guest:{guest_id}"
 
 # ─── Conversation routing ─────────────────────────────────────────────────────
 requested_conversation_id = st.query_params.get("conversation")
 if (
     requested_conversation_id
     and (
-        conversation_exists(requested_conversation_id)
-        or st.session_state.get("conversation_id") == requested_conversation_id
+        conversation_exists(
+            requested_conversation_id,
+            user_id=conversation_owner_id,
+        )
+        or (
+            st.session_state.get("conversation_id") == requested_conversation_id
+            and st.session_state.get("conversation_owner_id") == conversation_owner_id
+            and not conversation_is_hidden(
+                requested_conversation_id,
+                user_id=conversation_owner_id,
+            )
+        )
     )
 ):
     conversation_id = requested_conversation_id
@@ -76,9 +94,16 @@ else:
     conversation_id = new_conversation_id()
     st.query_params["conversation"] = conversation_id
 
-if st.session_state.get("conversation_id") != conversation_id:
+if (
+    st.session_state.get("conversation_id") != conversation_id
+    or st.session_state.get("conversation_owner_id") != conversation_owner_id
+):
     st.session_state.conversation_id = conversation_id
-    st.session_state.messages = load_messages(conversation_id)
+    st.session_state.conversation_owner_id = conversation_owner_id
+    st.session_state.messages = load_messages(
+        conversation_id,
+        user_id=conversation_owner_id,
+    )
 
 
 @st.cache_resource
@@ -90,21 +115,54 @@ def get_collection():
 app_ui.render_header(user)
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
-user_id = user["sub"] if user else None
-sidebar_result = app_ui.render_sidebar(list_conversations(), user)
+search_key = f"history_search_{conversation_owner_id}"
+conversations = list_conversations(
+    user_id=conversation_owner_id,
+    search_query=st.session_state.get(search_key, ""),
+)
+sidebar_result = app_ui.render_sidebar(conversations, user, conversation_owner_id)
 sidebar_action, _ = sidebar_result
 
 if sidebar_action:
-    action, selected_conversation_id = sidebar_action
+    action = sidebar_action[0]
+    selected_conversation_id = sidebar_action[1]
     if action == "new":
         conversation_id = new_conversation_id()
         st.session_state.conversation_id = conversation_id
+        st.session_state.conversation_owner_id = conversation_owner_id
         st.session_state.messages = []
         st.query_params["conversation"] = conversation_id
     elif action == "preferences":
         st.session_state["show_preferences"] = not st.session_state.get("show_preferences", False)
-    else:
+    elif action == "select":
         st.query_params["conversation"] = selected_conversation_id
+    elif action == "rename":
+        title = sidebar_action[2]
+        if rename_conversation(
+            selected_conversation_id,
+            title,
+            user_id=conversation_owner_id,
+        ):
+            st.session_state.pop("editing_conversation_id", None)
+        else:
+            st.error("לא ניתן לערוך את הכותרת של השיחה הזו.")
+    elif action == "delete":
+        if hide_conversation(
+            selected_conversation_id,
+            user_id=conversation_owner_id,
+        ):
+            st.session_state.pop("deleting_conversation_id", None)
+            if selected_conversation_id == conversation_id:
+                conversation_id = new_conversation_id()
+                st.session_state.conversation_id = conversation_id
+                st.session_state.messages = []
+                st.query_params["conversation"] = conversation_id
+        else:
+            st.error("לא ניתן להסיר את השיחה הזו מההיסטוריה.")
+    elif action == "cancel_edit":
+        st.session_state.pop("editing_conversation_id", None)
+    elif action == "cancel_delete":
+        st.session_state.pop("deleting_conversation_id", None)
     st.rerun()
 
 # ─── Preferences panel ────────────────────────────────────────────────────────
@@ -173,7 +231,12 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    save_message(conversation_id, "user", question)
+    save_message(
+        conversation_id,
+        "user",
+        question,
+        user_id=conversation_owner_id,
+    )
 
     with st.chat_message("assistant"):
         with st.spinner("מחפש מידע באתר הפניקס..."):
@@ -208,6 +271,7 @@ if question:
     message_id = save_message(
         conversation_id, "assistant", answer, sources,
         chunk_ids=chunk_ids, prompt_text=prompt_text,
+        user_id=conversation_owner_id,
     )
     st.session_state.messages.append({
         "role": "assistant",

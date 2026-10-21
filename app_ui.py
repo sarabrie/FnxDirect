@@ -156,7 +156,7 @@ def render_header(user=None):
     st.markdown(greeting_html + _HEADER_HTML, unsafe_allow_html=True)
 
 
-def render_sidebar(conversations, user=None):
+def render_sidebar(conversations, user=None, history_owner_id=None):
     with st.sidebar:
         st.markdown("### הפניקס")
         st.caption("עוזר מידע אישי")
@@ -169,13 +169,69 @@ def render_sidebar(conversations, user=None):
             action = ("preferences", None)
         st.divider()
         st.markdown("**היסטוריית שיחות**")
+        st.text_input(
+            "חיפוש שיחה",
+            placeholder="חיפוש בכותרת או בתוכן",
+            key=f"history_search_{history_owner_id or 'guest'}",
+        )
         for conversation in conversations:
-            if st.button(
-                conversation["title"],
-                key=f"history_{conversation['id']}",
-                use_container_width=True,
-            ):
-                action = ("select", conversation["id"])
+            conversation_id = conversation["id"]
+            editing_id = st.session_state.get("editing_conversation_id")
+            deleting_id = st.session_state.get("deleting_conversation_id")
+
+            if editing_id == conversation_id:
+                with st.form(f"rename_history_{conversation_id}"):
+                    new_title = st.text_input(
+                        "כותרת חדשה",
+                        value=conversation["title"],
+                        max_chars=48,
+                        key=f"rename_title_{conversation_id}",
+                    )
+                    save_col, cancel_col = st.columns(2)
+                    with save_col:
+                        save_title = st.form_submit_button(
+                            "שמור",
+                            disabled=not new_title.strip(),
+                        )
+                    with cancel_col:
+                        cancel_edit = st.form_submit_button("ביטול")
+                if save_title:
+                    action = ("rename", conversation_id, new_title)
+                elif cancel_edit:
+                    action = ("cancel_edit", conversation_id)
+
+            row_cols = st.columns([6, 1, 1])
+            with row_cols[0]:
+                if st.button(
+                    conversation["title"],
+                    key=f"history_{conversation_id}",
+                    use_container_width=True,
+                ):
+                    action = ("select", conversation_id)
+            with row_cols[1]:
+                if st.button("✎", key=f"edit_history_{conversation_id}", help="עריכת כותרת"):
+                    st.session_state["editing_conversation_id"] = conversation_id
+                    st.session_state.pop("deleting_conversation_id", None)
+                    st.rerun()
+            with row_cols[2]:
+                if deleting_id == conversation_id:
+                    confirm_delete = st.button(
+                        "✓",
+                        key=f"confirm_delete_{conversation_id}",
+                        help="הסרה מההיסטוריה שלי",
+                    )
+                    if confirm_delete:
+                        action = ("delete", conversation_id)
+                elif st.button("×", key=f"delete_history_{conversation_id}", help="הסרה מההיסטוריה שלי"):
+                    st.session_state["deleting_conversation_id"] = conversation_id
+                    st.session_state.pop("editing_conversation_id", None)
+                    st.rerun()
+            if deleting_id == conversation_id:
+                st.caption("השיחה תוסתר רק מההיסטוריה שלך; הנתונים יישארו במאגר.")
+                if st.button("ביטול הסרה", key=f"cancel_delete_{conversation_id}"):
+                    action = ("cancel_delete", conversation_id)
+        if not conversations:
+            st.caption("לא נמצאו שיחות.")
         st.divider()
         st.markdown("**נושאים שאפשר לשאול עליהם**")
         st.caption("תביעות · ביטוח רכב · ביטוח דירה · ביטוח נסיעות")
