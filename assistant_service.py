@@ -25,7 +25,7 @@ httpx.AsyncClient.__init__ = _patched_async_init
 
 from dotenv import load_dotenv
 import streamlit as st
-from chat_history import get_chunk_score
+from chat_history import get_chunk_scores
 from performance import timed
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
@@ -121,15 +121,20 @@ def generate_rag_response(question, collection, user_prefs=None):
     sources = []
     chunk_ids = []
     scored = []
+    valid_results = []
+    for document, metadata, chunk_id in zip(documents, metadatas, ids):
+        if not isinstance(document, str) or not document.strip():
+            continue
+        if not isinstance(metadata, dict):
+            metadata = {}
+        if _is_generic_homepage_url(metadata.get("url")):
+            continue
+        valid_results.append((chunk_id, document, metadata))
+
+    chunk_scores = get_chunk_scores(chunk_id for chunk_id, _, _ in valid_results)
     with timed("rag.rerank"):
-        for document, metadata, chunk_id in zip(documents, metadatas, ids):
-            if not isinstance(document, str) or not document.strip():
-                continue
-            if not isinstance(metadata, dict):
-                metadata = {}
-            if _is_generic_homepage_url(metadata.get("url")):
-                continue
-            scored.append((get_chunk_score(chunk_id), chunk_id, document, metadata))
+        for chunk_id, document, metadata in valid_results:
+            scored.append((chunk_scores.get(chunk_id, 1.0), chunk_id, document, metadata))
 
         # Re-rank: penalised chunks sink to the bottom, still included for transparency
         scored.sort(key=lambda x: x[0], reverse=True)

@@ -4,8 +4,8 @@ from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
-import psycopg2
 from psycopg2.extras import RealDictCursor
+from database_pool import connect
 from performance import timed_function
 
 # Kept for compatibility with existing function signatures; PostgreSQL uses DATABASE_URL.
@@ -15,10 +15,7 @@ DATABASE_PATH = Path(
 
 
 def _connect(database_path=DATABASE_PATH):
-    return psycopg2.connect(
-        os.environ["DATABASE_URL"],
-        cursor_factory=RealDictCursor,
-    )
+    return connect(cursor_factory=RealDictCursor)
 
 
 def _execute(connection, query, parameters=()):
@@ -115,6 +112,22 @@ def list_conversations(
 
 
 @timed_function("db.load_messages")
+def _messages_from_rows(rows, include_db_id=False):
+    messages = []
+    for row in rows:
+        message = {
+            "role": row["role"],
+            "content": row["content"],
+            "sources": json.loads(row["sources_json"]),
+            "message_id": row["id"] if row["role"] == "assistant" else None,
+        }
+        if include_db_id:
+            message["_db_id"] = row["id"]
+        messages.append(message)
+    return messages
+
+
+@timed_function("db.load_messages")
 def load_messages(conversation_id, database_path=DATABASE_PATH, user_id=None):
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
@@ -137,15 +150,51 @@ def load_messages(conversation_id, database_path=DATABASE_PATH, user_id=None):
             """,
             (conversation_id, user_id, owner_key),
         ).fetchall()
-    return [
-        {
-            "role": row["role"],
-            "content": row["content"],
-            "sources": json.loads(row["sources_json"]),
-            "message_id": row["id"] if row["role"] == "assistant" else None,
-        }
-        for row in rows
-    ]
+    return _messages_from_rows(rows)
+
+
+@timed_function("db.load_messages_page")
+def load_messages_page(
+    conversation_id,
+    database_path=DATABASE_PATH,
+    user_id=None,
+    limit=50,
+    before_id=None,
+):
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    owner_key = user_id if user_id is not None else "__guest__"
+    before_clause = "" if before_id is None else "AND id < %s"
+    parameters = (
+        (conversation_id, user_id, owner_key, limit + 1)
+        if before_id is None
+        else (conversation_id, before_id, user_id, owner_key, limit + 1)
+    )
+    with closing(_connect(database_path)) as connection:
+        rows = _execute(
+            connection,
+            f"""
+            SELECT id, role, content, sources_json
+            FROM messages
+            WHERE conversation_id = %s
+              {before_clause}
+              AND EXISTS (
+                  SELECT 1 FROM conversations
+                  WHERE conversations.id = messages.conversation_id
+                    AND conversations.user_id IS NOT DISTINCT FROM %s
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM hidden_conversations
+                  WHERE hidden_conversations.conversation_id = messages.conversation_id
+                    AND hidden_conversations.user_id = %s
+              )
+            ORDER BY id DESC
+            LIMIT %s
+            """,
+            parameters,
+        ).fetchall()
+    has_more = len(rows) > limit
+    return _messages_from_rows(list(reversed(rows[:limit])), include_db_id=True), has_more
 
 
 @timed_function("db.save_message")
@@ -320,6 +369,20 @@ def get_chunk_score(chunk_id, database_path=DATABASE_PATH):
             "SELECT score FROM chunk_scores WHERE chunk_id=%s", (chunk_id,)
         ).fetchone()
     return row["score"] if row else 1.0
+
+
+@timed_function("db.get_chunk_scores")
+def get_chunk_scores(chunk_ids, database_path=DATABASE_PATH):
+    chunk_ids = list(chunk_ids)
+    if not chunk_ids:
+        return {}
+    with closing(_connect(database_path)) as connection:
+        rows = _execute(
+            connection,
+            "SELECT chunk_id, score FROM chunk_scores WHERE chunk_id = ANY(%s)",
+            (chunk_ids,),
+        ).fetchall()
+    return {row["chunk_id"]: row["score"] for row in rows}
 
 
 @timed_function("db.get_negative_feedback")

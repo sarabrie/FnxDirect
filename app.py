@@ -22,12 +22,14 @@ from chat_history import (
     hide_conversation,
     initialize_history,
     list_conversations,
-    load_messages,
+    load_messages_page,
     new_conversation_id,
     rename_conversation,
     save_message,
     save_feedback,
 )
+
+MESSAGE_PAGE_SIZE = 50
 
 _PERF_LOGGER.info(
     "performance phase=app.import duration_ms=%.2f",
@@ -114,10 +116,12 @@ if (
 ):
     st.session_state.conversation_id = conversation_id
     st.session_state.conversation_owner_id = conversation_owner_id
-    st.session_state.messages = load_messages(
+    st.session_state.messages, has_older_messages = load_messages_page(
         conversation_id,
         user_id=conversation_owner_id,
+        limit=MESSAGE_PAGE_SIZE,
     )
+    st.session_state["has_older_messages"] = has_older_messages
 
 
 @st.cache_resource
@@ -155,6 +159,7 @@ if sidebar_action:
         st.session_state.conversation_id = conversation_id
         st.session_state.conversation_owner_id = conversation_owner_id
         st.session_state.messages = []
+        st.session_state["has_older_messages"] = False
         st.query_params["conversation"] = conversation_id
     elif action == "preferences":
         st.session_state["show_preferences"] = not st.session_state.get("show_preferences", False)
@@ -182,6 +187,7 @@ if sidebar_action:
                 conversation_id = new_conversation_id()
                 st.session_state.conversation_id = conversation_id
                 st.session_state.messages = []
+                st.session_state["has_older_messages"] = False
                 st.query_params["conversation"] = conversation_id
         else:
             st.error("לא ניתן להסיר את השיחה הזו מההיסטוריה.")
@@ -258,6 +264,18 @@ if not st.session_state.messages:
     selected_question = app_ui.render_suggestions()
 else:
     selected_question = None
+    if st.session_state.get("has_older_messages") and st.button(
+        "טען הודעות קודמות"
+    ):
+        older_messages, has_older_messages = load_messages_page(
+            conversation_id,
+            user_id=conversation_owner_id,
+            limit=MESSAGE_PAGE_SIZE,
+            before_id=st.session_state.messages[0]["_db_id"],
+        )
+        st.session_state.messages = older_messages + st.session_state.messages
+        st.session_state["has_older_messages"] = has_older_messages
+        st.rerun()
     app_ui.render_messages(st.session_state.messages, on_feedback=_on_feedback)
 
 typed_question = st.chat_input("כתבו את השאלה שלכם...")

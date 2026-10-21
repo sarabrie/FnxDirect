@@ -12,8 +12,8 @@ from uuid import uuid4
 
 import bcrypt
 import jwt
-import psycopg2
 from psycopg2.extras import RealDictCursor
+from database_pool import connect
 from performance import timed_function
 
 JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))  # stable only if set in .env
@@ -31,10 +31,7 @@ _DUMMY_HASH = bcrypt.hashpw(b"timing-guard-dummy", bcrypt.gensalt(BCRYPT_ROUNDS)
 # ─── Schema ──────────────────────────────────────────────────────────────────
 
 def _connect():
-    return psycopg2.connect(
-        os.environ["DATABASE_URL"],
-        cursor_factory=RealDictCursor,
-    )
+    return connect(cursor_factory=RealDictCursor)
 
 
 def init_auth_db():
