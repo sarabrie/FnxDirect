@@ -1,96 +1,33 @@
 import json
 import os
-import sqlite3
 from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
+# Kept for compatibility with existing function signatures; PostgreSQL uses DATABASE_URL.
 DATABASE_PATH = Path(
     os.getenv("CHAT_HISTORY_DB_PATH", Path(__file__).with_name("chat_history.sqlite3"))
 )
 
 
 def _connect(database_path=DATABASE_PATH):
-    connection = sqlite3.connect(database_path)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    return psycopg2.connect(
+        os.environ["DATABASE_URL"],
+        cursor_factory=RealDictCursor,
+    )
+
+
+def _execute(connection, query, parameters=()):
+    cursor = connection.cursor()
+    cursor.execute(query, parameters)
+    return cursor
 
 
 def initialize_history(database_path=DATABASE_PATH):
-    with closing(_connect(database_path)) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL DEFAULT 'שיחה חדשה',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-                role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-                content TEXT NOT NULL,
-                sources_json TEXT NOT NULL DEFAULT '[]',
-                chunk_ids_json TEXT NOT NULL DEFAULT '[]',
-                prompt_text TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE INDEX IF NOT EXISTS messages_conversation_id_idx
-                ON messages(conversation_id, id);
-
-            CREATE TABLE IF NOT EXISTS hidden_conversations (
-                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-                user_id TEXT NOT NULL,
-                hidden_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (conversation_id, user_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS message_feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-                conversation_id TEXT NOT NULL,
-                user_id TEXT,
-                rating TEXT NOT NULL CHECK (rating IN ('LIKE', 'DISLIKE')),
-                reasons_json TEXT NOT NULL DEFAULT '[]',
-                comment TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE INDEX IF NOT EXISTS feedback_message_idx ON message_feedback(message_id);
-
-            CREATE TABLE IF NOT EXISTS chunk_scores (
-                chunk_id TEXT PRIMARY KEY,
-                score REAL NOT NULL DEFAULT 1.0,
-                dislike_count INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-        )
-        # Migrate existing DB: add columns if they don't exist yet
-        existing_cols = {row[1] for row in connection.execute("PRAGMA table_info(messages)").fetchall()}
-        if "chunk_ids_json" not in existing_cols:
-            connection.execute("ALTER TABLE messages ADD COLUMN chunk_ids_json TEXT NOT NULL DEFAULT '[]'")
-        if "prompt_text" not in existing_cols:
-            connection.execute("ALTER TABLE messages ADD COLUMN prompt_text TEXT")
-        conv_cols = {row[1] for row in connection.execute("PRAGMA table_info(conversations)").fetchall()}
-        if "user_id" not in conv_cols:
-            connection.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT")
-        connection.execute("CREATE INDEX IF NOT EXISTS conversations_user_id_idx ON conversations(user_id)")
-        connection.execute(
-            """
-            DELETE FROM conversations
-            WHERE NOT EXISTS (
-                SELECT 1 FROM messages
-                WHERE messages.conversation_id = conversations.id
-            )
-            """
-        )
-        connection.commit()
+    return None
 
 
 def new_conversation_id():
@@ -100,14 +37,14 @@ def new_conversation_id():
 def conversation_exists(conversation_id, database_path=DATABASE_PATH, user_id=None):
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
-        row = connection.execute(
+        row = _execute(connection,
             """
             SELECT 1
             FROM conversations c
-            WHERE c.id = ? AND c.user_id IS ?
+            WHERE c.id = %s AND c.user_id IS NOT DISTINCT FROM %s
               AND NOT EXISTS (
                   SELECT 1 FROM hidden_conversations h
-                  WHERE h.conversation_id = c.id AND h.user_id = ?
+                  WHERE h.conversation_id = c.id AND h.user_id = %s
               )
             """,
             (conversation_id, user_id, owner_key),
@@ -118,10 +55,10 @@ def conversation_exists(conversation_id, database_path=DATABASE_PATH, user_id=No
 def conversation_is_hidden(conversation_id, database_path=DATABASE_PATH, user_id=None):
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
-        row = connection.execute(
+        row = _execute(connection,
             """
             SELECT 1 FROM hidden_conversations
-            WHERE conversation_id = ? AND user_id = ?
+            WHERE conversation_id = %s AND user_id = %s
             """,
             (conversation_id, owner_key),
         ).fetchone()
@@ -138,28 +75,28 @@ def list_conversations(
     escaped_query = search_query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     search_pattern = f"%{escaped_query}%"
     with closing(_connect(database_path)) as connection:
-        rows = connection.execute(
+        rows = _execute(connection,
             """
             SELECT c.id, c.title, c.updated_at
             FROM conversations c
-            WHERE c.user_id IS ?
+            WHERE c.user_id IS NOT DISTINCT FROM %s
               AND NOT EXISTS (
                   SELECT 1
                   FROM hidden_conversations h
-                  WHERE h.conversation_id = c.id AND h.user_id = ?
+                  WHERE h.conversation_id = c.id AND h.user_id = %s
               )
               AND (
-                  ? = ''
-                  OR c.title LIKE ? ESCAPE '\\'
+                  %s = ''
+                  OR c.title ILIKE %s ESCAPE E'\\\\'
                   OR EXISTS (
                       SELECT 1
                       FROM messages m
                       WHERE m.conversation_id = c.id
-                        AND m.content LIKE ? ESCAPE '\\'
+                        AND m.content ILIKE %s ESCAPE E'\\\\'
                   )
               )
             ORDER BY c.updated_at DESC, c.created_at DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (
                 user_id,
@@ -176,20 +113,20 @@ def list_conversations(
 def load_messages(conversation_id, database_path=DATABASE_PATH, user_id=None):
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
-        rows = connection.execute(
+        rows = _execute(connection,
             """
             SELECT id, role, content, sources_json
             FROM messages
-            WHERE conversation_id = ?
+            WHERE conversation_id = %s
               AND EXISTS (
                   SELECT 1 FROM conversations
                   WHERE conversations.id = messages.conversation_id
-                    AND conversations.user_id IS ?
+                    AND conversations.user_id IS NOT DISTINCT FROM %s
               )
               AND NOT EXISTS (
                   SELECT 1 FROM hidden_conversations
                   WHERE hidden_conversations.conversation_id = messages.conversation_id
-                    AND hidden_conversations.user_id = ?
+                    AND hidden_conversations.user_id = %s
               )
             ORDER BY id
             """,
@@ -222,45 +159,48 @@ def save_message(
     title = " ".join((conversation_title or content).split())[:48]
     with closing(_connect(database_path)) as connection:
         with connection:
-            conversation = connection.execute(
-                "SELECT user_id FROM conversations WHERE id = ?",
+            conversation = _execute(connection,
+                "SELECT user_id FROM conversations WHERE id = %s",
                 (conversation_id,),
             ).fetchone()
             if conversation is None:
-                connection.execute(
-                    "INSERT INTO conversations (id, user_id) VALUES (?, ?)",
+                _execute(connection,
+                    "INSERT INTO conversations (id, user_id) VALUES (%s, %s)",
                     (conversation_id, user_id),
                 )
             elif conversation["user_id"] != user_id:
                 raise ValueError("השיחה אינה שייכת למשתמש הנוכחי.")
-            elif connection.execute(
+            elif _execute(connection,
                 """
                 SELECT 1 FROM hidden_conversations
-                WHERE conversation_id = ? AND user_id = ?
+                WHERE conversation_id = %s AND user_id = %s
                 """,
                 (conversation_id, user_id if user_id is not None else "__guest__"),
             ).fetchone():
                 raise ValueError("השיחה הוסרה מההיסטוריה.")
-            cursor = connection.execute(
+            cursor = _execute(connection,
                 """
                 INSERT INTO messages (conversation_id, role, content, sources_json, chunk_ids_json, prompt_text)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (conversation_id, role, content, sources_json, chunk_ids_json, prompt_text),
             )
-            connection.execute(
+            _execute(connection,
                 """
                 UPDATE conversations
                 SET title = CASE
-                    WHEN title = 'שיחה חדשה' AND ? = 'user' THEN ?
+                    WHEN title = 'שיחה חדשה' AND %s = 'user' THEN %s
                     ELSE title
                 END,
                 updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = %s
                 """,
                 (role, title, conversation_id),
             )
-    return cursor.lastrowid
+        message_id = cursor.fetchone()["id"]
+        connection.commit()
+    return message_id
 
 
 def rename_conversation(
@@ -275,14 +215,14 @@ def rename_conversation(
 
     with closing(_connect(database_path)) as connection:
         with connection:
-            cursor = connection.execute(
+            cursor = _execute(connection,
                 """
                 UPDATE conversations
-                SET title = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id IS ?
+                SET title = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s AND user_id IS NOT DISTINCT FROM %s
                   AND NOT EXISTS (
                       SELECT 1 FROM hidden_conversations
-                      WHERE conversation_id = conversations.id AND user_id = ?
+                      WHERE conversation_id = conversations.id AND user_id = %s
                   )
                 """,
                 (
@@ -292,6 +232,7 @@ def rename_conversation(
                     user_id if user_id is not None else "__guest__",
                 ),
             )
+        connection.commit()
     return cursor.rowcount == 1
 
 
@@ -299,22 +240,24 @@ def hide_conversation(conversation_id, database_path=DATABASE_PATH, user_id=None
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
         with connection:
-            cursor = connection.execute(
+            cursor = _execute(connection,
                 """
-                INSERT OR IGNORE INTO hidden_conversations (conversation_id, user_id)
-                SELECT id, ?
+                INSERT INTO hidden_conversations (conversation_id, user_id)
+                SELECT id, %s
                 FROM conversations
-                WHERE id = ? AND user_id IS ?
+                WHERE id = %s AND user_id IS NOT DISTINCT FROM %s
+                ON CONFLICT (conversation_id, user_id) DO NOTHING
                 """,
                 (owner_key, conversation_id, user_id),
             )
+        connection.commit()
     return cursor.rowcount == 1
 
 
 def get_last_message_id(conversation_id, role="assistant", database_path=DATABASE_PATH):
     with closing(_connect(database_path)) as connection:
-        row = connection.execute(
-            "SELECT id FROM messages WHERE conversation_id=? AND role=? ORDER BY id DESC LIMIT 1",
+        row = _execute(connection,
+            "SELECT id FROM messages WHERE conversation_id=%s AND role=%s ORDER BY id DESC LIMIT 1",
             (conversation_id, role),
         ).fetchone()
     return row["id"] if row else None
@@ -325,52 +268,53 @@ def save_feedback(message_id, conversation_id, user_id, rating, reasons, comment
     with closing(_connect(database_path)) as connection:
         with connection:
             # Upsert: one feedback per user per message
-            existing = connection.execute(
-                "SELECT id FROM message_feedback WHERE message_id=? AND (user_id=? OR (user_id IS NULL AND ?=''))",
+            existing = _execute(connection,
+                "SELECT id FROM message_feedback WHERE message_id=%s AND (user_id=%s OR (user_id IS NULL AND %s=''))",
                 (message_id, user_id, user_id or ""),
             ).fetchone()
             if existing:
-                connection.execute(
-                    "UPDATE message_feedback SET rating=?, reasons_json=?, comment=?, created_at=CURRENT_TIMESTAMP WHERE id=?",
+                _execute(connection,
+                    "UPDATE message_feedback SET rating=%s, reasons_json=%s, comment=%s, created_at=CURRENT_TIMESTAMP WHERE id=%s",
                     (rating, reasons_json, comment, existing["id"]),
                 )
             else:
-                connection.execute(
-                    "INSERT INTO message_feedback (message_id, conversation_id, user_id, rating, reasons_json, comment) VALUES (?,?,?,?,?,?)",
+                _execute(connection,
+                    "INSERT INTO message_feedback (message_id, conversation_id, user_id, rating, reasons_json, comment) VALUES (%s,%s,%s,%s,%s,%s)",
                     (message_id, conversation_id, user_id, rating, reasons_json, comment),
                 )
             # Update chunk scores for dislikes with inaccuracy reason
             if rating == "DISLIKE" and "המידע אינו מדויק או שגוי" in (reasons or []):
-                row = connection.execute(
-                    "SELECT chunk_ids_json FROM messages WHERE id=?", (message_id,)
+                row = _execute(connection,
+                    "SELECT chunk_ids_json FROM messages WHERE id=%s", (message_id,)
                 ).fetchone()
                 if row:
                     chunk_ids = json.loads(row["chunk_ids_json"] or "[]")
                     for cid in chunk_ids:
-                        connection.execute(
+                        _execute(connection,
                             """
                             INSERT INTO chunk_scores (chunk_id, score, dislike_count)
-                            VALUES (?, 0.9, 1)
+                            VALUES (%s, 0.9, 1)
                             ON CONFLICT(chunk_id) DO UPDATE SET
                                 dislike_count = dislike_count + 1,
-                                score = MAX(0.1, score - 0.1),
+                                score = GREATEST(0.1, score - 0.1),
                                 updated_at = CURRENT_TIMESTAMP
                             """,
                             (cid,),
                         )
+        connection.commit()
 
 
 def get_chunk_score(chunk_id, database_path=DATABASE_PATH):
     with closing(_connect(database_path)) as connection:
-        row = connection.execute(
-            "SELECT score FROM chunk_scores WHERE chunk_id=?", (chunk_id,)
+        row = _execute(connection,
+            "SELECT score FROM chunk_scores WHERE chunk_id=%s", (chunk_id,)
         ).fetchone()
     return row["score"] if row else 1.0
 
 
 def get_negative_feedback(limit=50, database_path=DATABASE_PATH):
     with closing(_connect(database_path)) as connection:
-        rows = connection.execute(
+        rows = _execute(connection,
             """
             SELECT f.id, f.message_id, f.conversation_id, f.user_id,
                    f.rating, f.reasons_json, f.comment, f.created_at,
@@ -378,7 +322,7 @@ def get_negative_feedback(limit=50, database_path=DATABASE_PATH):
             FROM message_feedback f
             JOIN messages m ON m.id = f.message_id
             WHERE f.rating = 'DISLIKE'
-            ORDER BY f.created_at DESC LIMIT ?
+            ORDER BY f.created_at DESC LIMIT %s
             """,
             (limit,),
         ).fetchall()
