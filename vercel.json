@@ -1,15 +1,23 @@
 {
   "services": {
+    "app": {
+      "root": ".",
+      "runtime": "container",
+      "entrypoint": "Dockerfile.vercel"
+    },
     "auth": {
       "root": ".",
       "framework": "fastapi",
       "entrypoint": "auth.main:app",
-      "installCommand": "pip install -r auth/requirements.txt"
-    },
-    "web": {
-      "root": ".",
-      "runtime": "container",
-      "entrypoint": "Dockerfile.vercel"
+      "installCommand": "pip install -r auth/requirements.txt",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "app",
+          "format": "url",
+          "env": "APP_URL"
+        }
+      ]
     }
   },
   "rewrites": [
@@ -34,7 +42,7 @@
     {
       "source": "/(.*)",
       "destination": {
-        "service": "web"
+        "service": "app"
       }
     }
   ]
