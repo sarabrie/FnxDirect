@@ -12,8 +12,11 @@
 
 3. Open <http://localhost:8501>.
 
-The app routes are `/` (sign-in), `/chat` (authenticated chat), `/history`, and
-`/logout`. Google OAuth returns to `/auth_google_callback`. Set `BASE_URL` to the
+The app routes are `/` (sign-in or guest entry), `/chat`, `/history`, and
+`/logout`. Guests can start chatting without an account; their conversations
+remain available in that browser session and are transferred to their account
+when they sign in or register. Google OAuth returns to `/auth_google_callback`.
+Set `BASE_URL` to the
 public HTTPS origin in production (for example, `https://assistant.example.com`);
 the full authorized redirect URI is `BASE_URL/auth_google_callback`. Streamlit
 supports single-segment page paths only, so the callback uses an underscore
