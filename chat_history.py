@@ -105,6 +105,49 @@ def new_conversation_id():
     return str(uuid4())
 
 
+def migrate_guest_conversations(guest_id, user_id, database_path=DATABASE_PATH):
+    if not guest_id or not user_id:
+        raise ValueError("מזהה אורח ומזהה משתמש נדרשים להעברת השיחות.")
+
+    guest_owner_id = f"guest:{guest_id}"
+    with closing(_connect(database_path)) as connection:
+        with connection:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM conversations WHERE user_id = ?",
+                (guest_owner_id,),
+            ).fetchone()[0]
+            if not count:
+                return 0
+
+            connection.execute(
+                """
+                UPDATE hidden_conversations
+                SET user_id = ?
+                WHERE user_id = ?
+                  AND conversation_id IN (
+                      SELECT id FROM conversations WHERE user_id = ?
+                  )
+                """,
+                (user_id, guest_owner_id, guest_owner_id),
+            )
+            connection.execute(
+                """
+                UPDATE message_feedback
+                SET user_id = ?
+                WHERE user_id IS NULL
+                  AND conversation_id IN (
+                      SELECT id FROM conversations WHERE user_id = ?
+                  )
+                """,
+                (user_id, guest_owner_id),
+            )
+            connection.execute(
+                "UPDATE conversations SET user_id = ? WHERE user_id = ?",
+                (user_id, guest_owner_id),
+            )
+    return count
+
+
 def conversation_exists(conversation_id, database_path=DATABASE_PATH, user_id=None):
     owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:

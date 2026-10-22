@@ -314,6 +314,12 @@ def render_landing():
                 st.session_state["landing_tab"] = "login"
                 st.rerun()
 
+        st.markdown('<div class="divider-text">או</div>', unsafe_allow_html=True)
+        if st.button("המשך כאורח", use_container_width=True):
+            st.session_state["guest_mode"] = True
+            st.rerun()
+        st.caption("אפשר להתחבר בהמשך ולהעביר את השיחות לחשבון.")
+
         st.markdown('</div>', unsafe_allow_html=True)  # card
 
     with hero_col:
@@ -324,7 +330,7 @@ def render_landing():
                 <div class="hero-points">
                     <div class="hero-point"><span class="hero-point-mark">✓</span>תשובות שמבוססות על מידע רשמי</div>
                     <div class="hero-point"><span class="hero-point-mark">↗</span>קישורים לעמודים הרלוונטיים באתר</div>
-                    <div class="hero-point"><span class="hero-point-mark">⌕</span>השיחות נשמרות בחשבון שלכם</div>
+                    <div class="hero-point"><span class="hero-point-mark">⌕</span>השיחות עוברות לחשבון כשתתחברו</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -332,7 +338,7 @@ def render_landing():
     st.markdown("""
         <div class="trust-row">
             <div class="trust-item"><span class="trust-dot">✳</span> תשובות מבוססות מקור</div>
-            <div class="trust-item"><span class="trust-dot">⌑</span> היסטוריה נשמרת בחשבון</div>
+            <div class="trust-item"><span class="trust-dot">⌑</span> השיחות נשמרות בחשבון אחרי התחברות</div>
             <div class="trust-item"><span class="trust-dot">◷</span> קישורים למידע הרלוונטי</div>
         </div>
     """, unsafe_allow_html=True)

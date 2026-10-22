@@ -4,7 +4,7 @@ from datetime import date, datetime
 from urllib.parse import urlsplit
 import streamlit as st
 import streamlit.components.v1 as components
-from routes import history_page, logout_page
+from routes import history_page, landing_page, logout_page
 
 DISLIKE_REASONS = [
     "המידע אינו מדויק או שגוי",
@@ -209,15 +209,18 @@ def render_sidebar(conversations, user=None, history_owner_id=None):
         if user:
             st.markdown("**השיחות שלי**")
             st.page_link(history_page, label="היסטוריה מלאה")
-            search_query = st.text_input(
-                "חיפוש שיחה",
-                placeholder="חיפוש בכותרת או בתוכן",
-                key=f"history_search_{history_owner_id or 'guest'}",
-            )
+        else:
+            st.markdown("**השיחות כאורח**")
+            st.caption("התחברו כדי להעביר אותן לחשבון ולשמור אותן שם.")
+        search_query = st.text_input(
+            "חיפוש שיחה",
+            placeholder="חיפוש בכותרת או בתוכן",
+            key=f"history_search_{history_owner_id or 'guest'}",
+        )
         today = date.today()
         group_labels = {"today": "היום", "week": "7 הימים האחרונים", "older": "קודמות"}
         last_group = None
-        for conversation in conversations if user else []:
+        for conversation in conversations:
             try:
                 updated = datetime.fromisoformat(conversation.get("updated_at", "")).date()
             except (TypeError, ValueError):
@@ -282,7 +285,7 @@ def render_sidebar(conversations, user=None, history_owner_id=None):
                 st.caption("השיחה תוסתר רק מההיסטוריה שלך; הנתונים יישארו במאגר.")
                 if st.button("ביטול הסרה", key=f"cancel_delete_{conversation_id}"):
                     action = ("cancel_delete", conversation_id)
-        if user and not conversations:
+        if not conversations:
             empty_message = "לא נמצאו שיחות מתאימות. נסו מילות חיפוש אחרות." if search_query else "השיחות שלכם יופיעו כאן אחרי שתתחילו לשאול."
             st.markdown(f'<div class="history-empty">{empty_message}</div>', unsafe_allow_html=True)
         st.divider()
@@ -309,8 +312,8 @@ def _render_sidebar_user(user):
     else:
         st.caption("כניסה כאורח")
         if st.button("התחברות / הרשמה", use_container_width=True, type="primary"):
-            st.session_state.pop("landing_done", None)
-            st.rerun()
+            st.session_state["guest_mode"] = False
+            st.switch_page(landing_page)
 
 
 def render_suggestions():

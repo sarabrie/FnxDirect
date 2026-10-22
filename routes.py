@@ -11,7 +11,7 @@ from chat_history import list_conversations
 
 
 def render_landing_page():
-    if auth_ui.get_current_user():
+    if auth_ui.get_current_user() or st.session_state.get("guest_mode"):
         st.switch_page(chat_page)
     landing_ui.render_landing()
 

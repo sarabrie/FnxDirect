@@ -17,6 +17,7 @@ from chat_history import (
     initialize_history,
     list_conversations,
     load_messages,
+    migrate_guest_conversations,
     new_conversation_id,
     rename_conversation,
     save_message,
@@ -34,9 +35,15 @@ initialize_history()
 
 # ─── Auth state ───────────────────────────────────────────────────────────────
 user = auth_ui.get_current_user()
-if not user:
+guest_mode = st.session_state.get("guest_mode", False)
+if not user and not guest_mode:
     st.switch_page(landing_page)
     st.stop()
+
+if user and st.session_state.get("guest_id"):
+    migrate_guest_conversations(st.session_state["guest_id"], user["sub"])
+    st.session_state.pop("guest_id", None)
+    st.session_state.pop("guest_mode", None)
 
 # Keep the legacy query route working, now behind authentication.
 if st.query_params.get("admin") == "1":
@@ -97,13 +104,9 @@ app_ui.render_header(user)
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 search_key = f"history_search_{conversation_owner_id}"
-conversations = (
-    list_conversations(
-        user_id=conversation_owner_id,
-        search_query=st.session_state.get(search_key, ""),
-    )
-    if user
-    else []
+conversations = list_conversations(
+    user_id=conversation_owner_id,
+    search_query=st.session_state.get(search_key, ""),
 )
 sidebar_result = app_ui.render_sidebar(conversations, user, conversation_owner_id)
 sidebar_action, _ = sidebar_result
