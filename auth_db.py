@@ -24,10 +24,17 @@ ACCESS_TTL = 15 * 60          # 15 min
 REFRESH_TTL_DAYS = 30
 BCRYPT_ROUNDS = 12
 
-_PASSWORD_RE = re.compile(
-    r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()\-_=+\[\]{};:'\",.<>/?\\|`~]).{8,128}$"
-)
-_DUMMY_HASH = bcrypt.hashpw(b"timing-guard-dummy", bcrypt.gensalt(BCRYPT_ROUNDS))
+# 8–128 characters with at least one letter (any language) and one digit.
+_PASSWORD_RE = re.compile(r"^(?=.*[^\W\d_])(?=.*\d).{8,128}$", re.DOTALL)
+_dummy_hash = None
+
+
+def _get_dummy_hash():
+    # Computed on first use (not at import) — bcrypt is slow and imports should stay fast.
+    global _dummy_hash
+    if _dummy_hash is None:
+        _dummy_hash = bcrypt.hashpw(b"timing-guard-dummy", bcrypt.gensalt(BCRYPT_ROUNDS))
+    return _dummy_hash
 
 
 # ─── Schema ──────────────────────────────────────────────────────────────────
@@ -35,13 +42,21 @@ _DUMMY_HASH = bcrypt.hashpw(b"timing-guard-dummy", bcrypt.gensalt(BCRYPT_ROUNDS)
 def _connect():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
+_auth_db_initialized = False
+
+
 def init_auth_db():
+    # Called from several pages on every rerun — run the DDL only once per process.
+    global _auth_db_initialized
+    if _auth_db_initialized:
+        return
+    _auth_db_initialized = True
     with closing(_connect()) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")  # persistent on the DB file
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS users (
                 id            TEXT PRIMARY KEY,
@@ -145,7 +160,7 @@ def verify_access_token(token: str) -> dict | None:
 def validate_password(password: str) -> str | None:
     """Returns error message or None if valid."""
     if not _PASSWORD_RE.match(password):
-        return "הסיסמה חייבת להכיל 8–128 תווים, אות גדולה, אות קטנה, ספרה וסימן מיוחד."
+        return "הסיסמה חייבת להכיל לפחות 8 תווים, ובהם לפחות אות אחת וספרה אחת."
     return None
 
 
@@ -176,7 +191,7 @@ def login_user(email: str, password: str) -> tuple[str, str] | str:
     with closing(_connect()) as conn:
         row = conn.execute("SELECT * FROM users WHERE email = ? COLLATE NOCASE", (email,)).fetchone()
     if row is None:
-        bcrypt.checkpw(password.encode(), _DUMMY_HASH)  # timing-safe
+        bcrypt.checkpw(password.encode(), _get_dummy_hash())  # timing-safe
         return "אימייל או סיסמה שגויים."
     stored = row["password_hash"]
     if not stored or not bcrypt.checkpw(password.encode(), stored.encode()):

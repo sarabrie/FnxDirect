@@ -41,7 +41,9 @@ _CSS = """
       var(--canvas);
 }
 
-.block-container { max-width: 1180px; padding: 4.5rem 2rem 3rem; }
+/* The landing page has no sidebar or toolbar — hide the header so the page fits one screen. */
+[data-testid="stHeader"] { display: none; }
+.block-container { max-width: 1180px; padding: 1.75rem 2rem 1rem; }
 .stApp, .stApp button, .stApp input { font-family: 'Heebo', sans-serif; }
 
 .landing-wrap {
@@ -53,7 +55,7 @@ _CSS = """
     display: flex;
     align-items: center;
     gap: 12px;
-    margin: 0 0 3.5rem;
+    margin: 0 0 1.75rem;
 }
 
 .brand-mark {
@@ -94,29 +96,30 @@ _CSS = """
     background: var(--teal-pale); color: var(--teal-dark); font-size: 14px; flex-shrink: 0;
 }
 
-.card {
+.st-key-auth_card {
     background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 32px 30px 26px;
+    border-color: var(--line) !important;
+    border-radius: 10px !important;
+    padding: 26px 26px 18px !important;
     box-shadow: 0 16px 44px rgba(20,44,50,.08), 0 2px 6px rgba(20,44,50,.03);
-    margin: 0 auto;
     max-width: 440px;
+    margin: 0 auto;
 }
+.st-key-auth_card [data-testid="stForm"] { border: none; padding: 0; }
 
 .card-title {
     font-size: 23px; font-weight: 800; color: var(--ink);
-    margin-bottom: 6px;
+    margin-bottom: 16px;
 }
 
 .card-sub {
     font-size: 14px; color: var(--muted);
-    margin-bottom: 22px;
+    margin-bottom: 16px;
 }
 
 .divider-text {
     display: flex; align-items: center; gap: 10px;
-    color: var(--muted); font-size: 12px; margin: 18px 0;
+    color: var(--muted); font-size: 12px; margin: 10px 0;
 }
 .divider-text::before, .divider-text::after {
     content: ''; flex: 1; height: 1px; background: var(--line);
@@ -124,7 +127,7 @@ _CSS = """
 
 .trust-row {
     display: flex; gap: 28px; justify-content: center;
-    margin: 3rem auto 0; padding-top: 20px; border-top: 1px solid var(--line); flex-wrap: wrap;
+    margin: 1.5rem auto 0; padding-top: 14px; border-top: 1px solid var(--line); flex-wrap: wrap;
 }
 .trust-item {
     display: flex; align-items: center; gap: 6px;
@@ -134,7 +137,7 @@ _CSS = """
 
 [data-testid="stTextInput"] input {
     direction: rtl; text-align: right;
-    font-family: 'Heebo', sans-serif; min-height: 46px;
+    font-family: 'Heebo', sans-serif; min-height: 44px;
     border-radius: 7px !important; border-color: var(--line) !important;
     background: #fbfdfc !important; transition: border-color .16s ease, box-shadow .16s ease;
 }
@@ -173,13 +176,25 @@ _CSS = """
 .google-btn:focus-visible { outline: 3px solid rgba(8,127,121,.32); outline-offset: 2px; }
 .google-logo { width: 20px; height: 20px; }
 
+/* Short screens (laptops): tighten vertical spacing so everything stays on one screen. */
+@media (max-height: 820px) and (min-width: 761px) {
+    .block-container { padding-top: 1rem; }
+    .brand-row { margin-bottom: 1rem; }
+    .hero-title { font-size: 40px; }
+    .hero-sub { font-size: 15px; line-height: 1.7; margin-bottom: 16px; }
+    .hero-points { gap: 10px; margin-top: 18px; }
+    .st-key-auth_card { padding: 20px 22px 14px !important; }
+    .card-sub { margin-bottom: 12px; }
+    .trust-row { margin-top: 1rem; padding-top: 10px; }
+}
+
 @media (max-width: 760px) {
     .block-container { padding: 2rem 1rem 2rem; }
     .brand-row { margin-bottom: 2.25rem; }
     .hero-title { font-size: 36px; }
     .hero-sub { font-size: 15px; }
     .hero-points { margin: 22px 0 30px; }
-    .card { padding: 25px 20px 20px; }
+    .st-key-auth_card { padding: 22px 18px 16px !important; }
     .trust-row { gap: 12px 20px; margin-top: 2rem; }
     main [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child { order: -1; }
 }
@@ -216,6 +231,13 @@ def _handle_google_callback(code: str):
     _save_session(*result)
 
 
+def _go_to_chat():
+    # Straight to the chat page — skips an extra rerun of the landing page that only redirects.
+    from routes import chat_page  # imported here: routes imports this module
+
+    st.switch_page(chat_page)
+
+
 def render_landing():
     """
     Renders the landing page. Returns True when the user should proceed to chat
@@ -224,8 +246,6 @@ def render_landing():
     st.markdown(_CSS, unsafe_allow_html=True)
 
     tab_state = st.session_state.get("landing_tab", "login")
-
-    st.markdown('<div class="landing-wrap">', unsafe_allow_html=True)
 
     # Brand
     st.markdown("""
@@ -239,12 +259,10 @@ def render_landing():
     """, unsafe_allow_html=True)
 
     auth_col, hero_col = st.columns([0.85, 1.15], gap="large", vertical_alignment="center")
-    with auth_col:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+    with auth_col, st.container(border=True, key="auth_card"):
 
         if tab_state == "login":
             st.markdown('<div class="card-title">ברוכים השבים</div>', unsafe_allow_html=True)
-            st.markdown('<div class="card-sub">התחברו כדי לשמור ולחזור לשיחות שלכם</div>', unsafe_allow_html=True)
 
             google_url = _google_oauth_url()
             if google_url:
@@ -263,22 +281,17 @@ def render_landing():
                 if not email or not password:
                     st.error("כדי להתחבר, מלאו אימייל וסיסמה.")
                 else:
-                    result = login_user(email, password)
+                    with st.spinner("מתחבר…"):
+                        result = login_user(email, password)
                     if isinstance(result, str):
                         st.error(result)
                     else:
                         _save_session(*result)
                         st.session_state["landing_done"] = True
-                        st.rerun()
-
-            st.markdown('<hr style="border:none;border-top:1px solid #d9e3e2;margin:20px 0">', unsafe_allow_html=True)
-            if st.button("פתיחת חשבון", use_container_width=True):
-                st.session_state["landing_tab"] = "register"
-                st.rerun()
+                        _go_to_chat()
 
         else:  # register
             st.markdown('<div class="card-title">יצירת חשבון</div>', unsafe_allow_html=True)
-            st.markdown('<div class="card-sub">שמרו את השיחות שלכם וחזרו אליהן בכל עת</div>', unsafe_allow_html=True)
 
             google_url = _google_oauth_url()
             if google_url:
@@ -291,7 +304,7 @@ def render_landing():
             with st.form("register_form", clear_on_submit=False):
                 display_name = st.text_input("שם תצוגה", placeholder="השם שלכם", label_visibility="collapsed")
                 email = st.text_input("אימייל", placeholder="כתובת אימייל", label_visibility="collapsed")
-                password = st.text_input("סיסמה", type="password", placeholder="סיסמה: 8+ תווים, אות גדולה, ספרה וסימן", label_visibility="collapsed")
+                password = st.text_input("סיסמה", type="password", placeholder="סיסמה: לפחות 8 תווים, אות וספרה", label_visibility="collapsed")
                 password2 = st.text_input("אימות סיסמה", type="password", placeholder="הזינו שוב את הסיסמה", label_visibility="collapsed")
                 submitted = st.form_submit_button("יצירת חשבון", use_container_width=True, type="primary")
 
@@ -301,49 +314,38 @@ def render_landing():
                 elif password != password2:
                     st.error("הסיסמאות לא תואמות. בדקו את ההקלדה ונסו שוב.")
                 else:
-                    result = register_user(email, password, display_name)
+                    with st.spinner("יוצר חשבון…"):
+                        result = register_user(email, password, display_name)
                     if isinstance(result, str):
                         st.error(result)
                     else:
                         _save_session(*result)
                         st.session_state["landing_done"] = True
-                        st.rerun()
-
-            st.markdown('<hr style="border:none;border-top:1px solid #d9e3e2;margin:20px 0">', unsafe_allow_html=True)
-            if st.button("יש לי חשבון", use_container_width=True):
-                st.session_state["landing_tab"] = "login"
-                st.rerun()
+                        _go_to_chat()
 
         st.markdown('<div class="divider-text">או</div>', unsafe_allow_html=True)
-        if st.button("המשך כאורח", use_container_width=True):
-            st.session_state["guest_mode"] = True
-            st.rerun()
-        st.caption("אפשר להתחבר בהמשך ולהעביר את השיחות לחשבון.")
+        switch_col, guest_col = st.columns(2, gap="small")
+        with switch_col:
+            switch_label, switch_to = ("פתיחת חשבון", "register") if tab_state == "login" else ("יש לי חשבון", "login")
+            if st.button(switch_label, use_container_width=True):
+                st.session_state["landing_tab"] = switch_to
+                st.rerun()
+        with guest_col:
+            if st.button("המשך כאורח", use_container_width=True):
+                st.session_state["guest_mode"] = True
+                st.rerun()
 
-        st.markdown('</div>', unsafe_allow_html=True)  # card
 
     with hero_col:
         st.markdown("""
-                <div class="hero-kicker">מידע ברור, במקום אחד</div>
                 <div class="hero-title">ביטוח, קצת<br>יותר פשוט.</div>
-                <div class="hero-sub">שאלו על הכיסויים, התביעות והשירות שלכם. העוזר של הפניקס יכוון אתכם למידע הרלוונטי באתר, בשפה ברורה ובכל שעה.</div>
-                <div class="hero-points">
-                    <div class="hero-point"><span class="hero-point-mark">✓</span>תשובות שמבוססות על מידע רשמי</div>
-                    <div class="hero-point"><span class="hero-point-mark">↗</span>קישורים לעמודים הרלוונטיים באתר</div>
-                    <div class="hero-point"><span class="hero-point-mark">⌕</span>השיחות עוברות לחשבון כשתתחברו</div>
-                </div>
+                <div class="hero-sub">כל התשובות על הביטוח שלכם, במקום אחד.</div>
                 """, unsafe_allow_html=True)
 
-    # Trust indicators
-    st.markdown("""
-        <div class="trust-row">
-            <div class="trust-item"><span class="trust-dot">✳</span> תשובות מבוססות מקור</div>
-            <div class="trust-item"><span class="trust-dot">⌑</span> השיחות נשמרות בחשבון אחרי התחברות</div>
-            <div class="trust-item"><span class="trust-dot">◷</span> קישורים למידע הרלוונטי</div>
-        </div>
-    """, unsafe_allow_html=True)
+    # The rest of the search engine keeps loading while the user logs in.
+    import splash_ui
 
-    st.markdown('</div>', unsafe_allow_html=True)  # landing-wrap
+    splash_ui.render_progress_pill()
 
     return st.session_state.get("landing_done", False)
 

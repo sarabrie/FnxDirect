@@ -1,0 +1,17 @@
+[server]
+# The file watcher re-scans every loaded module on each script run. Once torch/transformers
+# are loaded (the search model) that is thousands of modules, and it added ~10s to every
+# page load, login and rerun. Downside: code changes need a server restart to take effect.
+fileWatcherType = "none"
+
+[browser]
+# Skip the usage-stats requests the browser sends to Streamlit on every page load.
+gatherUsageStats = false
+
+[client]
+# Hide the "Deploy" toolbar and developer menu items.
+toolbarMode = "minimal"
+
+[theme]
+# Brand teal for primary buttons (Streamlit's default primary is red).
+primaryColor = "#087f79"

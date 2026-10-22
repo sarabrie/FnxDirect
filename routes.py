@@ -34,17 +34,6 @@ def render_history_page():
             st.switch_page(chat_page)
 
 
-def render_logout_page():
-    if not auth_ui.get_current_user():
-        st.switch_page(landing_page)
-
-    st.title("התנתקות")
-    if st.button("התנתקות", type="primary"):
-        auth_ui.logout()
-        st.query_params.clear()
-        st.switch_page(landing_page)
-
-
 def render_google_callback():
     error = st.query_params.get("error")
     code = st.query_params.get("code")
@@ -93,11 +82,6 @@ history_page = st.Page(
     title="היסטוריית שיחות",
     url_path="history",
 )
-logout_page = st.Page(
-    render_logout_page,
-    title="התנתקות",
-    url_path="logout",
-)
 google_callback_page = st.Page(
     render_google_callback,
     title="התחברות עם Google",
@@ -113,7 +97,6 @@ PAGES = [
     landing_page,
     chat_page,
     history_page,
-    logout_page,
     google_callback_page,
     admin_page,
 ]

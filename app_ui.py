@@ -1,9 +1,11 @@
 import html
+import json
 import re
 from datetime import date, datetime
 from urllib.parse import urlsplit
 import streamlit as st
-from routes import history_page, landing_page, logout_page
+from routes import landing_page
+from topics import DEFAULT_SUGGESTIONS, TOPICS
 
 DISLIKE_REASONS = [
     "המידע אינו מדויק או שגוי",
@@ -23,9 +25,10 @@ _CSS = """
     --muted: #5d7074;
     --teal: #087f79;
     --teal-dark: #08645f;
+    --teal-light: #20a69d;
     --teal-pale: #e5f4f1;
-    --gold: #d79a34;
     --line: #d9e3e2;
+    --hairline: #e8efed;
     --surface: #ffffff;
     --canvas: #f5f8f7;
 }
@@ -34,191 +37,290 @@ _CSS = """
     direction: rtl;
     color: var(--ink);
     background:
-      radial-gradient(ellipse at 86% 0%, rgba(8,127,121,.075), transparent 32%),
+      radial-gradient(ellipse at 86% 0%, rgba(8,127,121,.08), transparent 32%),
+      radial-gradient(ellipse at 10% 100%, rgba(32,166,157,.06), transparent 30%),
       var(--canvas);
     font-family: 'Heebo', sans-serif;
 }
-
-[data-testid="stSidebar"] {
-    background: #eef4f2;
-    border-left: 1px solid var(--line);
-}
-
-[data-testid="stSidebar"] * { font-family: 'Heebo', sans-serif; }
-.block-container { max-width: 980px; padding: 2.5rem 2rem 7rem; }
 .stApp, .stApp button, .stApp input, .stApp textarea { font-family: 'Heebo', sans-serif; }
+/* Streamlit sets text-align:left on each element container; Hebrew content starts on the right. */
+.stApp [data-testid="stElementContainer"], .stApp [data-testid="stMarkdownContainer"],
+.stApp [data-testid="stCaptionContainer"] { text-align: right; }
+.block-container { max-width: 940px; padding: 1.6rem 2rem 7rem; }
+.stSpinner > div { border-top-color: var(--teal) !important; }
 
-.brand-mark {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 42px; height: 42px; border-radius: 12px;
-    color: white; background: var(--teal); font-size: 23px; font-weight: 700;
-    box-shadow: 0 4px 10px rgba(8,100,95,.20);
-}
-
-.app-heading { padding: 12px 0 22px; border-bottom: 1px solid var(--line); margin-bottom: 26px; }
-.app-brand { display:flex; align-items:center; gap:12px; margin-bottom:24px; }
-.app-brand-name { color:var(--ink); font-size:16px; font-weight:800; }
-.app-brand-sub { color:var(--muted); font-size:12px; margin-top:1px; }
-.eyebrow { color: var(--teal-dark); font-size: 13px; font-weight: 700; margin-bottom: 6px; }
-.intro-title { color: var(--ink); font-size: 34px; font-weight: 800; line-height: 1.25; margin: 0; }
-.intro-copy { color: var(--muted); font-size: 15px; margin-top: 8px; line-height:1.7; }
-.trust-line { color: var(--muted); font-size: 12px; padding: 13px 0 0; }
-
-[data-testid="stChatMessage"] {
-    direction: rtl;
-    text-align: right;
-    border-radius: 8px;
-    margin-bottom: 16px;
-    padding: 18px 20px;
-    border: 1px solid var(--line);
-    background: var(--surface);
-    box-shadow: 0 3px 12px rgba(20,44,50,.035);
-}
-[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] { line-height: 1.8; }
-[data-testid="stChatMessage"] [data-testid="stChatMessageAvatarUser"] { background: var(--teal-pale); color: var(--teal-dark); }
-
-[data-testid="stChatInput"] { direction: rtl; }
-[data-testid="stChatInput"] textarea { text-align: right; font-family: 'Heebo', sans-serif; min-height:52px; }
-[data-testid="stChatInput"] > div { border-color: #b8cecb; border-radius: 8px; box-shadow: 0 8px 26px rgba(20,44,50,.08); }
-[data-testid="stChatInput"] > div:focus-within { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(8,127,121,.12), 0 8px 26px rgba(20,44,50,.08); }
-
+/* ── Buttons (base) ── */
 .stButton > button {
-    direction: rtl;
-    text-align: right;
-    border-color: var(--line);
-    color: var(--ink);
-    border-radius: 7px;
-    min-height: 40px;
-    transition: color .16s ease, background .16s ease, border-color .16s ease, transform .16s ease;
+    direction: rtl; border-color: var(--line); color: var(--ink); border-radius: 10px; min-height: 40px;
+    transition: color .16s ease, background .16s ease, border-color .16s ease, transform .16s ease, box-shadow .16s ease;
 }
-
-.stButton > button:hover {
-    border-color: var(--teal);
-    color: var(--teal-dark);
-    background: #f2faf8;
-    transform: translateY(-1px);
-}
+.stButton > button:hover { border-color: var(--teal); color: var(--teal-dark); background: #f2faf8; }
 .stButton > button:focus-visible { outline: 3px solid rgba(8,127,121,.28); outline-offset: 2px; }
-[data-testid="stSidebar"] .stButton > button { width:100%; }
-[data-testid="stSidebar"] [data-testid="stTextInput"] input { border-radius:7px; background:#fff; }
-.history-group { color:#718285; font-size:11px; font-weight:700; letter-spacing:0; margin:14px 0 5px; }
-.history-empty { border:1px dashed #bacbc8; border-radius:7px; padding:12px; color:var(--muted); font-size:12px; line-height:1.6; }
-.suggestion-heading { color:var(--ink); font-size:16px; font-weight:800; margin:4px 0 4px; }
-.suggestion-copy { color:var(--muted); font-size:13px; margin-bottom:12px; }
-.stSpinner > div { border-top-color:var(--teal) !important; }
 
+/* ── Sidebar: fits one screen; only the conversation list scrolls ── */
+[data-testid="stSidebar"] { background: #eef4f2; border-left: 1px solid var(--line); }
+/* Material icons need their own font — overriding it printed names like "keyboard_double_arrow_left". */
+[data-testid="stSidebar"] *:not([data-testid="stIconMaterial"]) { font-family: 'Heebo', sans-serif; }
+[data-testid="stSidebarContent"] { direction: rtl; text-align: right; overflow: hidden; }
+[data-testid="stSidebarHeader"] { height: 2.6rem; min-height: 0; padding-top: .6rem; }
+[data-testid="stSidebarUserContent"] { padding: 0 1.25rem 0; }
+@media (min-width: 768px) {
+    section[data-testid="stSidebar"] { width: 340px !important; min-width: 340px !important; }
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: .55rem; }
+/* Streamlit pulls markdown blocks up by -16px (to offset <p> margins); our HTML blocks have no <p>. */
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+[data-testid="stSidebar"] .stButton > button { width: 100%; }
+[data-testid="stSidebar"] [data-testid="stTextInput"] input { border-radius: 10px; background: #fff; min-height: 38px; }
+.side-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.side-mark {
+    width: 34px; height: 34px; border-radius: 10px; flex: none;
+    display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px; font-weight: 800;
+    background: linear-gradient(135deg, var(--teal-light), var(--teal-dark)); box-shadow: 0 4px 12px rgba(8,100,95,.25);
+}
+.side-name { font-size: 16px; font-weight: 800; color: var(--ink); }
+.user-chip { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.user-avatar {
+    width: 34px; height: 34px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+    background: var(--teal-pale); color: var(--teal-dark); font-weight: 800; font-size: 14px; border: 1px solid #b9dcd5;
+}
+.user-name { font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.2; }
+.user-email { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guest-login-hint { color: var(--muted); font-size: 12.5px; margin-top: -2px; }
+.side-label { color: #718285; font-size: 12px; font-weight: 700; margin-top: 6px; }
+.st-key-history_list { max-height: calc(100vh - 372px); overflow-y: auto; overflow-x: hidden; padding-inline-end: 2px; }
+.st-key-history_list [data-testid="stVerticalBlock"] { gap: .3rem; }
+.history-group { color: #8a9a9c; font-size: 11px; font-weight: 700; margin: 8px 0 2px; }
+.history-empty { color: var(--muted); font-size: 12.5px; padding: 6px 2px; }
+[class*="st-key-history_"] button { min-height: 36px; background: transparent; border-color: transparent; }
+[class*="st-key-history_"] button:hover { background: #fff; border-color: var(--line); }
+[class*="st-key-history_"] button, [class*="st-key-history_"] button > div { justify-content: flex-start; }
+[class*="st-key-history_"] button p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+/* Small icon buttons: rename / delete / settings / logout */
+[class*="st-key-edit_history_"] button, [class*="st-key-delete_history_"] button,
+[class*="st-key-confirm_delete_"] button, [class*="st-key-cancel_delete_"] button,
+.st-key-logout button, .st-key-open_settings button {
+    min-height: 34px; padding: 0 8px; color: var(--muted); border-color: transparent; background: transparent;
+}
+[class*="st-key-edit_history_"] button:hover, .st-key-open_settings button:hover,
+[class*="st-key-cancel_delete_"] button:hover { color: var(--teal-dark); background: var(--teal-pale); border-color: transparent; }
+[class*="st-key-delete_history_"] button:hover, [class*="st-key-confirm_delete_"] button,
+.st-key-logout button:hover { color: #b42318; background: #fdecea; border-color: transparent; }
+.st-key-new_chat button { font-weight: 700; }
+.side-footer {
+    display: flex; align-items: center; gap: 6px; padding: 10px 0 12px; margin-top: 4px;
+    border-top: 1px solid var(--line); color: #7a8b8d; font-size: 11.5px;
+}
+.side-footer .copy-mark {
+    flex: none; font-size: 15px; font-weight: 700; line-height: 1; color: #6b7d7f;
+}
+
+/* ── Header + empty state ── */
+.hero { margin: 4px 0 18px; }
+.hero-hello { color: var(--teal-dark); font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+.hero-title {
+    font-size: 34px; font-weight: 800; line-height: 1.2; margin: 0;
+    background: linear-gradient(90deg, var(--ink), var(--teal-dark)); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.section-label { color: #718285; font-size: 12.5px; font-weight: 700; margin: 2px 0 6px; }
+
+/* Topic tiles: equal squares, icon above label */
+.st-key-topic_grid [data-testid="stHorizontalBlock"] { gap: 10px; }
+.st-key-topic_grid .stButton > button {
+    min-height: 88px; border-radius: 14px; background: #fff; border: 1px solid var(--line); color: var(--ink);
+    box-shadow: 0 2px 10px rgba(20,44,50,.04);
+}
+.st-key-topic_grid .stButton > button > div,
+.st-key-topic_grid .stButton > button > div > span { flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+.st-key-topic_grid .stButton > button p { font-size: 14px; font-weight: 700; text-align: center; }
+.st-key-topic_grid .stButton > button [data-testid="stIconMaterial"] { font-size: 26px; color: var(--teal); margin: 0; }
+.st-key-topic_grid .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(20,44,50,.08); }
+.st-key-topic_grid .stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, var(--teal-light), var(--teal-dark)); border-color: transparent; color: #fff;
+    box-shadow: 0 10px 24px rgba(8,127,121,.28);
+}
+.st-key-topic_grid .stButton > button[kind="primary"] [data-testid="stIconMaterial"] { color: #fff; }
+
+/* Suggested questions */
+.st-key-suggestions .stButton > button {
+    min-height: 64px; border-radius: 14px; background: #fff; border-color: var(--line); text-align: right;
+    box-shadow: 0 2px 10px rgba(20,44,50,.04);
+}
+.st-key-suggestions .stButton > button > div, .st-key-suggestions .stButton > button > div > span {
+    justify-content: space-between; width: 100%; flex-direction: row-reverse; gap: 8px;
+}
+.st-key-suggestions .stButton > button [data-testid="stIconMaterial"] { color: var(--teal); }
+.st-key-suggestions .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(20,44,50,.08); }
+
+/* ── Chat messages ── */
+@keyframes msg-in { from { opacity: 0; transform: translateY(10px); } }
+[data-testid="stChatMessage"] {
+    direction: rtl; text-align: right; background: transparent; border: none; box-shadow: none;
+    padding: 0; margin-bottom: 18px; gap: 12px; animation: msg-in .45s ease both;
+}
+[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] { line-height: 1.85; font-size: 15.5px; }
+/* User: gradient bubble on the right, no avatar */
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageAvatarUser"] { display: none; }
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
+    flex: 0 1 auto; max-width: 78%; padding: 11px 18px; color: #fff; position: relative;
+    margin-left: auto !important; margin-right: 0 !important;  /* Streamlit centers it; pin it to the right */
+    background: linear-gradient(135deg, #0b9189, var(--teal-dark));
+    border-radius: 20px 20px 6px 20px; box-shadow: 0 10px 24px rgba(8,100,95,.22);
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stMarkdownContainer"] { color: #fff; }
+/* The question's copy icon sits just outside the bubble (left) and shows on hover, like common chat apps */
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stElementContainer"]:has(iframe) {
+    position: absolute; left: -42px; bottom: 4px; width: 34px; opacity: 0; transition: opacity .2s ease;
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]):hover [data-testid="stElementContainer"]:has(iframe),
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stElementContainer"]:has(iframe):focus-within { opacity: 1; }
+/* Streamlit pulls markdown up by -16px to offset <p> margins; in the bubble we want plain padding */
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stMarkdownContainer"] { margin-bottom: 0 !important; }
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stMarkdownContainer"] p { margin: 0; }
+/* Assistant: white card with a gradient avatar */
+[data-testid="stChatMessageAvatarAssistant"] {
+    width: 38px; height: 38px; border-radius: 12px; color: #fff;
+    background: linear-gradient(135deg, var(--teal-light), var(--teal-dark)); box-shadow: 0 6px 16px rgba(8,100,95,.28);
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 6px 20px 20px 20px;
+    padding: 16px 22px 8px; box-shadow: 0 1px 2px rgba(20,44,50,.04), 0 14px 34px rgba(20,44,50,.07);
+}
+/* Answer actions: copy / like / dislike, under a hairline */
+[class*="st-key-actions_"] { border-top: 1px solid var(--hairline); padding-top: 6px; margin-top: 2px; }
+[class*="st-key-actions_"] [data-testid="stHorizontalBlock"] { gap: 2px; align-items: center; }
+[class*="st-key-like_"] button, [class*="st-key-dislike_"] button {
+    min-height: 32px; width: 32px; padding: 0; border-color: transparent; background: transparent; color: #7a8b8d;
+}
+[class*="st-key-like_"] button:hover, [class*="st-key-dislike_"] button:hover { background: var(--teal-pale); color: var(--teal-dark); border-color: transparent; }
+[class*="st-key-like_"] button[kind="primary"] { background: var(--teal-pale); color: var(--teal-dark); }
+.fb-thanks { color: var(--teal-dark); font-size: 12.5px; font-weight: 600; }
+
+/* Follow-ups: pills under the answer card; the newest set fades in one after another (light → dark) */
+[class*="st-key-followups_"] {
+    flex-direction: row !important; flex-wrap: wrap; gap: 8px !important; margin: -6px 50px 18px 0;
+}
+[class*="st-key-followups_"] > div { width: auto !important; flex: 0 1 auto; }
+[class*="st-key-follow_up_"] button {
+    min-height: 0; padding: 7px 16px; border-radius: 999px; font-size: 13.5px; font-weight: 600;
+    color: var(--teal-dark); background: #fff; border: 1px solid #b9dcd5; box-shadow: 0 3px 10px rgba(8,100,95,.07);
+}
+[class*="st-key-follow_up_"] button > div, [class*="st-key-follow_up_"] button > div > span { flex-direction: row-reverse; gap: 6px; }
+[class*="st-key-follow_up_"] button:hover {
+    background: var(--teal-pale); border-color: var(--teal); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(8,100,95,.12);
+}
+@keyframes fnx-follow-up-in { from { opacity: 0; transform: translateY(8px); color: #b5c6c3; } to { opacity: 1; transform: none; } }
+[class*="st-key-fu_anim"] { animation: fnx-follow-up-in .7s ease both; }
+[class*="st-key-fu_anim0_"] { animation-delay: .05s; }
+[class*="st-key-fu_anim1_"] { animation-delay: .4s; }
+[class*="st-key-fu_anim2_"] { animation-delay: .75s; }
+[class*="st-key-fu_anim3_"] { animation-delay: 1.1s; }
+/* Space kept while the answer is written, so nothing jumps when the actions / follow-ups appear */
+.actions-reserve { min-height: 59px; }
+.fu-reserve { min-height: 66px; }
+@media (prefers-reduced-motion: reduce) {
+    [class*="st-key-fu_anim"], [data-testid="stChatMessage"] { animation-duration: .01s; animation-delay: 0s !important; }
+}
+
+/* ── Chat input ── */
+[data-testid="stBottom"] > div, [data-testid="stBottomBlockContainer"] { background: transparent; }
+[data-testid="stChatInput"] { direction: rtl; }
+[data-testid="stChatInput"] textarea { text-align: right; font-family: 'Heebo', sans-serif; min-height: 52px; font-size: 15px; }
+[data-testid="stChatInput"] > div {
+    border-color: #c7d9d6; border-radius: 16px; background: #fff; box-shadow: 0 12px 34px rgba(20,44,50,.10);
+}
+[data-testid="stChatInput"] > div:focus-within { border-color: var(--teal); box-shadow: 0 0 0 4px rgba(8,127,121,.12), 0 12px 34px rgba(20,44,50,.10); }
+
+/* ── Sources ── */
 .src-toggle {
-    display: inline-flex; align-items: center; gap: 6px;
-    margin-top: 14px; padding: 6px 13px;
-    font-size: 12px; font-weight: 700;
-    color: var(--teal-dark); background: var(--teal-pale);
-    border: 1px solid #b9dcd5; border-radius: 7px;
-    cursor: pointer; list-style: none; user-select: none;
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 5px 12px;
+    font-size: 12px; font-weight: 700; color: var(--teal-dark); background: var(--teal-pale);
+    border: 1px solid #b9dcd5; border-radius: 999px; cursor: pointer; list-style: none; user-select: none;
     transition: background 0.15s ease; font-family: 'Heebo', sans-serif;
 }
 .src-toggle::-webkit-details-marker { display: none; }
 .src-toggle:hover { background: #d6eeea; }
-
 .src-popup {
-    margin-top: 8px; padding: 12px 14px;
-    background: #ffffff; border: 1px solid var(--line);
-    border-radius: 7px; box-shadow: 0 6px 24px rgba(20,44,50,.10);
-    display: flex; flex-direction: column; gap: 7px;
-    direction: rtl; font-family: 'Heebo', sans-serif; max-width: 420px;
+    margin-top: 8px; padding: 12px 14px; background: #ffffff; border: 1px solid var(--line);
+    border-radius: 12px; box-shadow: 0 6px 24px rgba(20,44,50,.10);
+    display: flex; flex-direction: column; gap: 7px; direction: rtl; font-family: 'Heebo', sans-serif; max-width: 420px;
 }
-
 .src-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-
 .src-num {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 20px; height: 20px; border-radius: 6px;
-    background: var(--teal-pale); color: var(--teal-dark);
-    font-size: 11px; font-weight: 700; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px;
+    background: var(--teal-pale); color: var(--teal-dark); font-size: 11px; font-weight: 700; flex-shrink: 0;
 }
-
 .src-link {
-    color: var(--ink) !important; font-weight: 600;
-    text-decoration: none !important; flex: 1;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    transition: color 0.15s ease;
+    color: var(--ink) !important; font-weight: 600; text-decoration: none !important; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color 0.15s ease;
 }
 .src-link:hover { color: var(--teal-dark) !important; }
 .src-arrow { font-size: 11px; color: var(--teal-dark); flex-shrink: 0; }
 
-.fb-toast {
-    font-size: 12px; color: var(--teal-dark); font-weight: 700;
-    padding: 4px 10px; background: var(--teal-pale);
-    border-radius: 7px; border: 1px solid #b9dcd5;
-    font-family: 'Heebo', sans-serif; display: inline-block; margin-top: 8px;
-}
-.fb-card {
-    margin-top: 10px; padding: 14px 16px;
-    background: #fff; border: 1px solid var(--line);
-    border-radius: 7px; direction: rtl;
-    font-family: 'Heebo', sans-serif;
-        box-shadow: 0 4px 16px rgba(20,44,50,.08);
-    max-width: 480px;
-}
-.fb-card-title { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 10px; }
+/* ── Dislike feedback form ── */
+.fb-card-title { font-size: 14px; font-weight: 700; color: var(--ink); margin: 6px 0 2px; }
 
 @media (max-width: 760px) {
-        .block-container { padding: 1.5rem 1rem 6rem; }
-        .intro-title { font-size: 28px; }
-        [data-testid="stChatMessage"] { padding: 14px; }
+    .block-container { padding: 1.2rem 1rem 6rem; }
+    .hero-title { font-size: 27px; }
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] { max-width: 92%; }
+    [class*="st-key-followups_"] { margin-right: 0; }
 }
 </style>
-"""
-
-_HEADER_HTML = """
-<div class="app-heading">
-<div class="app-brand">
-  <div class="brand-mark">✳</div>
-    <div><div class="app-brand-name">FNX Direct</div><div class="app-brand-sub">העוזר החכם של הפניקס</div></div>
-</div>
-<div class="eyebrow">מידע ברור, במקום אחד</div>
-<h1 class="intro-title">איך אפשר לעזור?</h1>
-<div class="intro-copy">שאלו על ביטוח, תביעות ושירות. התשובות מבוססות על המידע באתר הפניקס.</div>
-<div class="trust-line">✳ &nbsp; תשובות מבוססות מקור &nbsp; · &nbsp; קישורים לעמודי המידע הרלוונטיים</div>
-</div>
 """
 
 
 def render_header(user=None):
     st.markdown(_CSS, unsafe_allow_html=True)
-    greeting_html = ""
-    if user:
-        name = html.escape(user.get("name", "משתמש"))
-        greeting_html = f'<div style="font-size:13px;color:#087e70;font-weight:700;margin-bottom:6px">שלום, {name} 👋</div>'
-    st.markdown(greeting_html + _HEADER_HTML, unsafe_allow_html=True)
+    hello = f'<div class="hero-hello">שלום, {html.escape(user.get("name", ""))}</div>' if user else ""
+    st.markdown(
+        f'<div class="hero">{hello}<h1 class="hero-title">איך אפשר לעזור?</h1></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_sidebar(conversations, user=None, history_owner_id=None):
     with st.sidebar:
-        st.markdown("### FNX Direct")
-        st.caption("העוזר החכם של הפניקס")
-        _render_sidebar_user(user)
-        st.divider()
-        action = None
-        if st.button("שיחה חדשה", use_container_width=True):
-            action = ("new", None)
-        if user and st.button("⚙️ הגדרות אישיות", use_container_width=True):
-            action = ("preferences", None)
-        st.divider()
-        search_query = ""
-        if user:
-            st.markdown("**השיחות שלי**")
-            st.page_link(history_page, label="היסטוריה מלאה")
-        else:
-            st.markdown("**השיחות כאורח**")
-            st.caption("התחברו כדי להעביר אותן לחשבון ולשמור אותן שם.")
-        search_query = st.text_input(
-            "חיפוש שיחה",
-            placeholder="חיפוש בכותרת או בתוכן",
-            key=f"history_search_{history_owner_id or 'guest'}",
+        st.markdown(
+            '<div class="side-brand"><div class="side-mark">✳</div><div class="side-name">FNX Direct</div></div>',
+            unsafe_allow_html=True,
         )
-        today = date.today()
-        group_labels = {"today": "היום", "week": "7 הימים האחרונים", "older": "קודמות"}
-        last_group = None
+        _render_sidebar_user(user)
+        action = None
+        if user:
+            new_col, settings_col = st.columns([6, 1], gap="small", vertical_alignment="center")
+            with new_col:
+                if st.button("שיחה חדשה", icon=":material/add:", key="new_chat", use_container_width=True):
+                    action = ("new", None)
+            with settings_col:
+                # No tooltip: Streamlit keeps it open while the button has focus, covering the logout icon.
+                if st.button("", icon=":material/settings:", key="open_settings"):
+                    action = ("preferences", None)
+            action = _render_history(conversations, history_owner_id) or action
+        elif st.button("שיחה חדשה", icon=":material/add:", key="new_chat", use_container_width=True):
+            action = ("new", None)
+        st.markdown(
+            '<div class="side-footer"><span class="copy-mark" aria-hidden="true">©</span>'
+            "כל הזכויות שמורות לרינה קימל ושרה ברייש</div>",
+            unsafe_allow_html=True,
+        )
+    return action, False
+
+
+def _render_history(conversations, history_owner_id):
+    """Logged-in user's conversation list (search, rename, hide). Returns a sidebar action or None."""
+    action = None
+    st.markdown('<div class="side-label">השיחות שלי</div>', unsafe_allow_html=True)
+    search_query = st.text_input(
+        "חיפוש שיחה",
+        placeholder="חיפוש בשיחות",
+        key=f"history_search_{history_owner_id or 'guest'}",
+        label_visibility="collapsed",
+    )
+    today = date.today()
+    group_labels = {"today": "היום", "week": "7 הימים האחרונים", "older": "קודמות"}
+    last_group = None
+    with st.container(key="history_list"):
         for conversation in conversations:
             try:
                 updated = datetime.fromisoformat(conversation.get("updated_at", "")).date()
@@ -234,114 +336,128 @@ def render_sidebar(conversations, user=None, history_owner_id=None):
             deleting_id = st.session_state.get("deleting_conversation_id")
 
             if editing_id == conversation_id:
-                with st.form(f"rename_history_{conversation_id}"):
+                with st.form(f"rename_history_{conversation_id}", border=False):
                     new_title = st.text_input(
                         "כותרת חדשה",
                         value=conversation["title"],
                         max_chars=48,
                         key=f"rename_title_{conversation_id}",
+                        label_visibility="collapsed",
                     )
                     save_col, cancel_col = st.columns(2)
                     with save_col:
-                        save_title = st.form_submit_button(
-                            "שמור",
-                            disabled=not new_title.strip(),
-                        )
+                        save_title = st.form_submit_button("שמירה", disabled=not new_title.strip())
                     with cancel_col:
                         cancel_edit = st.form_submit_button("ביטול")
                 if save_title:
                     action = ("rename", conversation_id, new_title)
                 elif cancel_edit:
                     action = ("cancel_edit", conversation_id)
+                continue
 
-            row_cols = st.columns([6, 1, 1])
+            row_cols = st.columns([7, 1, 1], gap="small", vertical_alignment="center")
             with row_cols[0]:
-                if st.button(
-                    conversation["title"],
-                    key=f"history_{conversation_id}",
-                    use_container_width=True,
-                ):
+                if st.button(conversation["title"], key=f"history_{conversation_id}", use_container_width=True):
                     action = ("select", conversation_id)
+            if deleting_id == conversation_id:
+                # Confirm in place: ✕ keeps it, ✓ hides it from this user's history (data stays in the DB).
+                with row_cols[1]:
+                    if st.button("", icon=":material/close:", key=f"cancel_delete_{conversation_id}", help="ביטול"):
+                        action = ("cancel_delete", conversation_id)
+                with row_cols[2]:
+                    if st.button("", icon=":material/check:", key=f"confirm_delete_{conversation_id}", help="אישור הסרה"):
+                        action = ("delete", conversation_id)
+                continue
             with row_cols[1]:
-                if st.button("✎", key=f"edit_history_{conversation_id}", help="עריכת כותרת"):
+                if st.button("", icon=":material/edit:", key=f"edit_history_{conversation_id}", help="עריכת כותרת"):
                     st.session_state["editing_conversation_id"] = conversation_id
                     st.session_state.pop("deleting_conversation_id", None)
                     st.rerun()
             with row_cols[2]:
-                if deleting_id == conversation_id:
-                    confirm_delete = st.button(
-                        "✓",
-                        key=f"confirm_delete_{conversation_id}",
-                        help="הסרה מההיסטוריה שלי",
-                    )
-                    if confirm_delete:
-                        action = ("delete", conversation_id)
-                elif st.button("×", key=f"delete_history_{conversation_id}", help="הסרה מההיסטוריה שלי"):
+                if st.button("", icon=":material/delete:", key=f"delete_history_{conversation_id}", help="הסרה מההיסטוריה"):
                     st.session_state["deleting_conversation_id"] = conversation_id
                     st.session_state.pop("editing_conversation_id", None)
                     st.rerun()
-            if deleting_id == conversation_id:
-                st.caption("השיחה תוסתר רק מההיסטוריה שלך; הנתונים יישארו במאגר.")
-                if st.button("ביטול הסרה", key=f"cancel_delete_{conversation_id}"):
-                    action = ("cancel_delete", conversation_id)
         if not conversations:
-            empty_message = "לא נמצאו שיחות מתאימות. נסו מילות חיפוש אחרות." if search_query else "השיחות שלכם יופיעו כאן אחרי שתתחילו לשאול."
+            empty_message = "לא נמצאו שיחות." if search_query else "עדיין אין שיחות."
             st.markdown(f'<div class="history-empty">{empty_message}</div>', unsafe_allow_html=True)
-        st.divider()
-        st.markdown("**נושאים שאפשר לשאול עליהם**")
-        st.caption("תביעות · ביטוח רכב · ביטוח דירה · ביטוח נסיעות")
-    return action, False
+    return action
+
+
+def _go_to_login():
+    # After logging in, reopen the conversation the guest was in (it moves into the account).
+    st.session_state["resume_conversation_id"] = st.session_state.get("conversation_id")
+    st.session_state["guest_mode"] = False
+    st.switch_page(landing_page)
+
+
+def _logout():
+    import auth_ui
+
+    auth_ui.logout()
+    for key in ("messages", "conversation_id", "conversation_owner_id", "user_prefs", "show_preferences", "topic"):
+        st.session_state.pop(key, None)
+    st.query_params.clear()
+    st.switch_page(landing_page)
 
 
 def _render_sidebar_user(user):
     if user:
-        initial = user.get("name", "?")[0].upper()
-        name = user.get("name", "משתמש")
-        st.markdown(
-            f'<div style="display:inline-flex;align-items:center;gap:8px;background:#e8f5f1;'
-            f'border:1px solid #c5e0d8;border-radius:999px;padding:5px 14px 5px 10px;'
-            f'font-size:13px;font-weight:700;color:#087e70;font-family:Heebo,sans-serif">'
-            f'<span style="width:26px;height:26px;border-radius:50%;background:#087e70;color:white;'
-            f'display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:800">{initial}</span>'
-            f'{name}</div>',
-            unsafe_allow_html=True,
-        )
-        st.caption(user.get("email", ""))
-        st.page_link(logout_page, label="התנתקות")
+        name = user.get("name") or "משתמש"
+        chip_col, logout_col = st.columns([6, 1], gap="small", vertical_alignment="center")
+        with chip_col:
+            st.markdown(
+                f'<div class="user-chip"><span class="user-avatar">{html.escape(name[0].upper())}</span>'
+                f'<div style="min-width:0"><div class="user-name">{html.escape(name)}</div>'
+                f'<div class="user-email">{html.escape(user.get("email", ""))}</div></div></div>',
+                unsafe_allow_html=True,
+            )
+        with logout_col:
+            if st.button("", icon=":material/logout:", key="logout"):
+                _logout()
     else:
-        st.caption("כניסה כאורח")
         if st.button("התחברות / הרשמה", use_container_width=True, type="primary"):
-            st.session_state["guest_mode"] = False
-            st.switch_page(landing_page)
+            _go_to_login()
+        st.markdown('<div class="guest-login-hint">התחברו כדי לשמור את השיחות שלכם.</div>', unsafe_allow_html=True)
 
 
-def render_suggestions():
-    st.markdown('<div class="suggestion-heading">אפשר להתחיל מכאן</div><div class="suggestion-copy">בחרו נושא או כתבו שאלה משלכם</div>', unsafe_allow_html=True)
-    suggestions = [
-        "איך מגישים תביעה על נזקי מים?",
-        'מה כולל ביטוח נסיעות לחו"ל?',
-        "איך יוצרים קשר עם הפניקס?",
-    ]
-    suggestion_columns = st.columns(len(suggestions))
+def _toggle_topic(topic):
+    st.session_state["topic"] = None if st.session_state.get("topic") == topic else topic
+
+
+def render_topic_picker():
+    """
+    Four equal square tiles (icon above label). Clicking a tile limits the search to that topic;
+    clicking it again clears the choice. Returns the topic key, or None for all topics.
+    """
+    selected = st.session_state.get("topic")
+    with st.container(key="topic_grid"):
+        for column, (topic, info) in zip(st.columns(len(TOPICS), gap="small"), TOPICS.items()):
+            with column:
+                st.button(
+                    info["label"],
+                    icon=info["icon"],
+                    key=f"topic_{topic}",
+                    type="primary" if topic == selected else "secondary",
+                    use_container_width=True,
+                    on_click=_toggle_topic,
+                    args=(topic,),
+                )
+    return selected
+
+
+def render_suggestions(topic=None, disabled=False):
+    suggestions = TOPICS[topic]["suggestions"] if topic in TOPICS else DEFAULT_SUGGESTIONS
+    st.markdown('<div class="section-label">שאלות נפוצות</div>', unsafe_allow_html=True)
     selected_question = None
-    for column, suggestion in zip(suggestion_columns, suggestions):
-        if column.button(suggestion, use_container_width=True):
-            selected_question = suggestion
+    with st.container(key="suggestions"):
+        for column, suggestion in zip(st.columns(len(suggestions), gap="small"), suggestions):
+            if column.button(
+                suggestion, icon=":material/arrow_back:", use_container_width=True, disabled=disabled,
+                key=f"suggestion_{suggestion}",
+            ):
+                selected_question = suggestion
     return selected_question
-
-
-def render_followup_chips(questions):
-    """Render 2-3 follow-up suggestion chips. Returns the clicked question or None."""
-    if not questions:
-        return None
-    st.markdown('<div class="followup-chips">', unsafe_allow_html=True)
-    cols = st.columns(len(questions))
-    clicked = None
-    for col, q in zip(cols, questions):
-        if col.button(f"↩ {q}", key=f"followup_{hash(q)}", use_container_width=True):
-            clicked = q
-    st.markdown('</div>', unsafe_allow_html=True)
-    return clicked
 
 
 def _sanitize_for_copy(text):
@@ -364,100 +480,221 @@ def _sanitize_for_copy(text):
     return text.strip()
 
 
-def render_copy_button(content, message_id):
-    """Render a self-contained JS copy button — no st.rerun, isolated per message."""
-    clean = _sanitize_for_copy(content)
-    # Store text in data-attribute (html.escape handles all quotes/special chars safely)
-    data_text = html.escape(clean, quote=True)
-    uid = f"copy_{message_id}"
-    html_snippet = f"""
-<button id="{uid}" class="copy-btn"
-        title="העתק תוכן ללוח"
-        aria-label="העתק תוכן ללוח"
-        data-copy="{data_text}"
-        onclick="(function(){{
-            var btn = document.getElementById('{uid}');
-            navigator.clipboard.writeText(btn.dataset.copy).then(function(){{
-                btn.textContent = '✓ הועתק!';
-                btn.classList.add('copied');
-                setTimeout(function(){{ btn.textContent = '⎘ העתק תשובה'; btn.classList.remove('copied'); }}, 2000);
-            }}).catch(function(){{
-                btn.textContent = '⚠ לא זמין';
-                setTimeout(function(){{ btn.textContent = '⎘ העתק תשובה'; }}, 2000);
-            }});
-        }})()">
-  ⎘ העתק תשובה
+_COPY_BUTTON_HTML = """<!doctype html>
+<html dir="rtl"><head><meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: transparent; }
+  button {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0; color: #7a8b8d;
+    background: transparent; border: 1px solid transparent; border-radius: 7px;
+    cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+  }
+  button:hover { background: #e5f4f1; color: #08645f; }
+  button:focus-visible { outline: 3px solid rgba(8,127,121,.28); outline-offset: 2px; }
+  svg { width: 18px; height: 18px; }
+  .done, button.copied .copy, button.failed .copy { display: none; }
+  button.copied .done { display: block; }
+  button.copied { color: #087f79; background: #e5f4f1; }
+  button.failed { color: #b42318; }
+</style></head>
+<body><button type="button" title="__TITLE__" aria-label="__TITLE__">
+  <svg class="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+    <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
+  </svg>
+  <svg class="done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M5 12.5l4.5 4.5L19 7.5"></path>
+  </svg>
 </button>
-"""
-    st.markdown(html_snippet, unsafe_allow_html=True)
+<script>
+  const text = __TEXT__;
+  const title = __LABEL__;
+  const btn = document.querySelector("button");
+  function fallbackCopy() {
+    const area = document.createElement("textarea");
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok ? Promise.resolve() : Promise.reject();
+  }
+  function flash(state, message) {
+    btn.classList.add(state);
+    btn.title = message;
+    btn.setAttribute("aria-label", message);
+    setTimeout(() => {
+      btn.classList.remove(state);
+      btn.title = title;
+      btn.setAttribute("aria-label", title);
+    }, 2000);
+  }
+  btn.addEventListener("click", () => {
+    const copy = navigator.clipboard ? navigator.clipboard.writeText(text).catch(fallbackCopy) : fallbackCopy();
+    copy.then(() => flash("copied", "הועתק!"), () => flash("failed", "ההעתקה לא זמינה"));
+  });
+</script></body></html>"""
 
 
-def render_messages(messages, on_feedback=None):
+def _js_string(value):
+    # json.dumps gives a valid JS string literal; escaping every "<" means LLM text can never
+    # close the <script> or open markup inside the iframe.
+    return json.dumps(value, ensure_ascii=False).replace("<", "\\u003c")
+
+
+def render_copy_button(content, label="העתקה"):
+    """Copy icon button (label is its tooltip). Runs in an iframe because st.markdown strips onclick/JS."""
+    page = (
+        _COPY_BUTTON_HTML.replace("__TITLE__", html.escape(label, quote=True))
+        .replace("__LABEL__", _js_string(label))
+        .replace("__TEXT__", _js_string(_sanitize_for_copy(content)))
+    )
+    st.iframe(page, height=34)
+
+
+def render_follow_up_reserve():
+    """Empty space under the answer card where the follow-ups will appear, so nothing jumps."""
+    st.markdown('<div class="fu-reserve" aria-hidden="true"></div>', unsafe_allow_html=True)
+
+
+def render_actions_reserve():
+    """Empty space for the copy / feedback buttons that appear after the answer is saved."""
+    st.markdown('<div class="actions-reserve" aria-hidden="true"></div>', unsafe_allow_html=True)
+
+
+_SEARCH_STEPS = ["מחפש מידע באתר הפניקס…", "מנתח את המקורות הרלוונטיים…", "מנסח תשובה…"]
+_SEARCH_STEP_SECONDS = 2.4
+
+
+def render_search_status(placeholder):
+    """Rotating status text (search → analyze → compose); the last step stays until the answer starts."""
+    spans = []
+    for index, step in enumerate(_SEARCH_STEPS):
+        is_last = index == len(_SEARCH_STEPS) - 1
+        animation = "fnx-step-last" if is_last else "fnx-step"
+        spans.append(
+            f'<span class="fnx-status-step" style="animation: {animation} {_SEARCH_STEP_SECONDS}s ease '
+            f'{index * _SEARCH_STEP_SECONDS}s both">{html.escape(step)}</span>'
+        )
+    placeholder.markdown(
+        """
+<style>
+.fnx-status { display:flex; align-items:center; gap:10px; min-height:28px; color:var(--teal-dark, #08645f);
+    font-size:14px; font-weight:600; }
+.fnx-status-dot { width:14px; height:14px; border-radius:50%; flex:none;
+    border:2px solid #b9dcd5; border-top-color:#087f79; animation: fnx-spin .8s linear infinite; }
+.fnx-status-text { position:relative; flex:1; height:22px; }
+.fnx-status-step { position:absolute; inset-inline-start:0; top:0; white-space:nowrap; opacity:0; }
+@keyframes fnx-spin { to { transform: rotate(360deg); } }
+@keyframes fnx-step { 0% { opacity:0; transform:translateY(4px); } 12%, 85% { opacity:1; transform:none; }
+    100% { opacity:0; transform:translateY(-4px); } }
+@keyframes fnx-step-last { 0% { opacity:0; transform:translateY(4px); } 12%, 100% { opacity:1; transform:none; } }
+@media (prefers-reduced-motion: reduce) {
+    .fnx-status-dot { animation-duration: 2s; }
+    .fnx-status-step { animation-duration: .01s !important; }
+}
+</style>
+<div class="fnx-status" role="status" aria-live="polite">
+  <span class="fnx-status-dot"></span>
+  <span class="fnx-status-text">"""
+        + "".join(spans)
+        + "</span></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_messages(messages, on_feedback=None, animate_follow_ups_for=None, disabled=False):
     selected_question = None
+    assistant_indexes = [i for i, m in enumerate(messages) if m["role"] == "assistant"]
+    last_assistant = assistant_indexes[-1] if assistant_indexes else None
     for idx, message in enumerate(messages):
-        with st.chat_message(message["role"]):
-            if message["role"] == "assistant":
+        if message["role"] != "assistant":
+            with st.chat_message("user"):
                 st.markdown(message["content"])
-                follow_up_questions = message.get("follow_up_questions") or []
-                if not follow_up_questions and message.get("follow_up_question"):
-                    follow_up_questions = [message["follow_up_question"]]
-                if follow_up_questions:
-                    st.caption("אפשר להמשיך מכאן")
-                    message_id = message.get("message_id", idx)
-                    for option_idx, follow_up_question in enumerate(follow_up_questions):
-                        if st.button(
-                            f"💬 {follow_up_question}",
-                            key=f"follow_up_{message_id}_{option_idx}",
-                            use_container_width=True,
-                        ):
-                            selected_question = follow_up_question
-                render_sources(message.get("sources"))
-                render_copy_button(message["content"], message.get("message_id") or idx)
-                if on_feedback and message.get("message_id"):
-                    render_feedback_buttons(message["message_id"], idx)
-            else:
-                st.markdown(message["content"])
+                render_copy_button(message["content"], label="העתקת השאלה")
+            continue
+
+        message_id = message.get("message_id") or idx
+        with st.chat_message("assistant"):
+            st.markdown(message["content"])
+            render_sources(message.get("sources"))
+            render_message_actions(message["content"], message_id, with_feedback=bool(on_feedback and message.get("message_id")))
+        # Follow-ups sit under the answer card, only for the latest answer.
+        if idx == last_assistant:
+            follow_up_questions = message.get("follow_up_questions") or []
+            if not follow_up_questions and message.get("follow_up_question"):
+                follow_up_questions = [message["follow_up_question"]]
+            clicked = render_follow_ups(
+                follow_up_questions, message_id, animate=message_id == animate_follow_ups_for, disabled=disabled
+            )
+            selected_question = clicked or selected_question
     return selected_question
 
 
-def render_feedback_buttons(message_id, idx):
+def render_follow_ups(questions, message_id, animate=False, disabled=False):
+    """Follow-up pills under the answer card. Returns the clicked question or None."""
+    if not questions:
+        return None
+    clicked = None
+    with st.container(key=f"followups_{message_id}"):
+        for option_idx, question in enumerate(questions):
+            # Wrapper key only drives the CSS fade-in; the button keeps its own stable key.
+            with st.container(key=f"fu_anim{option_idx}_{message_id}") if animate else st.container():
+                if st.button(
+                    question,
+                    icon=":material/arrow_back:",
+                    key=f"follow_up_{message_id}_{option_idx}",
+                    disabled=disabled,
+                ):
+                    clicked = question
+    return clicked
+
+
+def render_message_actions(content, message_id, with_feedback=True):
+    """Copy / like / dislike row at the bottom of an answer card."""
     fb_key = f"fb_{message_id}"
     state = st.session_state.get(fb_key, "idle")  # idle | liked | dislike_open | submitted
-
-    if state == "liked":
-        st.markdown('<div class="fb-toast">תודה על המשוב שלך! 👍</div>', unsafe_allow_html=True)
-        return
-    if state == "submitted":
-        st.markdown('<div class="fb-toast">המשוב התקבל, תודה שעזרת לנו להשתפר! ❤️</div>', unsafe_allow_html=True)
-        return
-
-    col_like, col_dislike, _ = st.columns([1, 1, 8])
-    with col_like:
-        if st.button("👍", key=f"like_{message_id}", help="תשובה טובה", disabled=(state != "idle")):
-            st.session_state[fb_key] = "liked"
-            st.session_state[f"fb_submit_{message_id}"] = {"rating": "LIKE", "reasons": [], "comment": ""}
-            st.rerun()
-    with col_dislike:
-        if st.button("👎", key=f"dislike_{message_id}", help="דווח על בעיה", disabled=(state not in {"idle", "dislike_open"})):
-            st.session_state[fb_key] = "idle" if state == "dislike_open" else "dislike_open"
-            st.rerun()
+    with st.container(key=f"actions_{message_id}"):
+        copy_col, like_col, dislike_col, note_col = st.columns([1, 1, 1, 9], gap="small", vertical_alignment="center")
+        with copy_col:
+            render_copy_button(content, label="העתקת התשובה")
+        if not with_feedback:
+            return
+        with like_col:
+            if st.button(
+                "", icon=":material/thumb_up:", key=f"like_{message_id}", help="תשובה טובה",
+                type="primary" if state == "liked" else "secondary", disabled=state in {"liked", "submitted"},
+            ):
+                st.session_state[fb_key] = "liked"
+                st.session_state[f"fb_submit_{message_id}"] = {"rating": "LIKE", "reasons": [], "comment": ""}
+                st.rerun()
+        with dislike_col:
+            if st.button(
+                "", icon=":material/thumb_down:", key=f"dislike_{message_id}", help="דיווח על בעיה",
+                disabled=state in {"liked", "submitted"},
+            ):
+                st.session_state[fb_key] = "idle" if state == "dislike_open" else "dislike_open"
+                st.rerun()
+        with note_col:
+            if state in {"liked", "submitted"}:
+                st.markdown('<span class="fb-thanks">תודה על המשוב</span>', unsafe_allow_html=True)
 
     if state == "dislike_open":
-        st.markdown('<div class="fb-card"><div class="fb-card-title">מה לא היה בסדר?</div></div>', unsafe_allow_html=True)
-        selected = []
-        for reason in DISLIKE_REASONS:
-            if st.checkbox(reason, key=f"reason_{message_id}_{reason}"):
-                selected.append(reason)
+        st.markdown('<div class="fb-card-title">מה לא היה בסדר?</div>', unsafe_allow_html=True)
+        selected = [reason for reason in DISLIKE_REASONS if st.checkbox(reason, key=f"reason_{message_id}_{reason}")]
         comment = st.text_area(
             "פרטים נוספים",
-            placeholder="נשמח לפרטים נוספים שיעזרו לנו להשתפר...",
+            placeholder="פרטים נוספים (לא חובה)",
             key=f"comment_{message_id}",
             label_visibility="collapsed",
             height=80,
         )
         c1, c2, _ = st.columns([2, 2, 6])
         with c1:
-            if st.button("שלח משוב", key=f"submit_fb_{message_id}", type="primary"):
+            if st.button("שליחה", key=f"submit_fb_{message_id}", type="primary"):
                 st.session_state[f"fb_submit_{message_id}"] = {
                     "rating": "DISLIKE",
                     "reasons": selected,
@@ -475,6 +712,8 @@ def render_preferences_panel(user, on_save):
     from auth_db import get_bot_preferences, save_bot_preferences
     prefs = get_bot_preferences(user["sub"])
 
+    # No chat input on this screen, so no need for the bottom space reserved for it.
+    st.markdown('<style>.block-container { padding-bottom: 2rem; }</style>', unsafe_allow_html=True)
     st.markdown("### הגדרות אישיות")
     preferred_name = st.text_input(
         "שם / פנייה מועדפת",

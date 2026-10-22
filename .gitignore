@@ -4,3 +4,5 @@ __pycache__/
 chat_history.sqlite3
 chat_history.sqlite3-*
 .vscode/
+.warmup_seconds
+auth.sqlite3

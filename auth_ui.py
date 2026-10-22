@@ -221,7 +221,7 @@ def render_auth_page():
         with st.form("register_form", clear_on_submit=False):
             display_name = st.text_input("שם תצוגה", placeholder="השם שלך", label_visibility="collapsed")
             email = st.text_input("אימייל", placeholder="your@email.com", label_visibility="collapsed")
-            password = st.text_input("סיסמה", type="password", placeholder="סיסמה (8+ תווים, אות גדולה, ספרה, סימן)", label_visibility="collapsed")
+            password = st.text_input("סיסמה", type="password", placeholder="סיסמה: לפחות 8 תווים, אות וספרה", label_visibility="collapsed")
             password2 = st.text_input("אימות סיסמה", type="password", placeholder="הזינו שוב את הסיסמה", label_visibility="collapsed")
             submitted = st.form_submit_button("הרשמה", use_container_width=True, type="primary")
 

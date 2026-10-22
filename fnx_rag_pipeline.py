@@ -8,6 +8,7 @@ from firecrawl import FirecrawlApp
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from topics import topic_for_url
 
 load_dotenv()
 
@@ -88,7 +89,7 @@ def run_pipeline(target_urls=None):
         for url, page in successful_pages.items():
             documents = [str(chunk) for chunk in page["chunks"]]
             metadatas = [
-                {"url": url, "title": page["title"]}
+                {"url": url, "title": page["title"], "topic": topic_for_url(url)}
                 for _ in documents
             ]
             ids = [f"{url}#chunk_{i}" for i in range(len(documents))]

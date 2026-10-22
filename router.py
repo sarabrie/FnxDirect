@@ -4,14 +4,24 @@ load_dotenv()
 
 import streamlit as st
 
-from auth_db import init_auth_db
-from routes import PAGES
+import splash_ui
+import warmup
 
 st.set_page_config(
     page_title="הפניקס | עוזר אישי",
     page_icon="✳",
     layout="wide",
 )
+
+# Begin loading the search model (no-op if start.py already did). Until it is half loaded,
+# show the loading screen — decided before importing the app pages, so it appears immediately.
+warmup.start()
+if not splash_ui.splash_done():
+    splash_ui.render_splash()
+    st.stop()
+
+from auth_db import init_auth_db  # noqa: E402 — after the loading screen on purpose
+from routes import PAGES  # noqa: E402
 
 st.markdown(
     """
@@ -79,5 +89,7 @@ st.markdown(
 )
 
 init_auth_db()
+
+
 navigation = st.navigation(PAGES, position="hidden")
 navigation.run()

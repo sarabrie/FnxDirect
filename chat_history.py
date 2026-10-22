@@ -18,7 +18,14 @@ def _connect(database_path=DATABASE_PATH):
     return connection
 
 
+_initialized_paths = set()
+
+
 def initialize_history(database_path=DATABASE_PATH):
+    # Schema setup + cleanup scan only once per process, not on every Streamlit rerun.
+    if str(database_path) in _initialized_paths:
+        return
+    _initialized_paths.add(str(database_path))
     with closing(_connect(database_path)) as connection:
         connection.executescript(
             """
@@ -64,6 +71,16 @@ def initialize_history(database_path=DATABASE_PATH):
             );
 
             CREATE INDEX IF NOT EXISTS feedback_message_idx ON message_feedback(message_id);
+
+            CREATE TABLE IF NOT EXISTS answer_cache (
+                cache_key TEXT PRIMARY KEY,
+                answer TEXT NOT NULL,
+                sources_json TEXT NOT NULL DEFAULT '[]',
+                chunk_ids_json TEXT NOT NULL DEFAULT '[]',
+                prompt_text TEXT,
+                follow_up_questions_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
 
             CREATE TABLE IF NOT EXISTS chunk_scores (
                 chunk_id TEXT PRIMARY KEY,
@@ -415,6 +432,12 @@ def save_feedback(message_id, conversation_id, user_id, rating, reasons, comment
                     "INSERT INTO message_feedback (message_id, conversation_id, user_id, rating, reasons_json, comment) VALUES (?,?,?,?,?,?)",
                     (message_id, conversation_id, user_id, rating, reasons_json, comment),
                 )
+            if rating == "DISLIKE":
+                # Don't keep serving a cached answer that a user marked as bad.
+                connection.execute(
+                    "DELETE FROM answer_cache WHERE answer = (SELECT content FROM messages WHERE id=?)",
+                    (message_id,),
+                )
             # Update chunk scores for dislikes with inaccuracy reason
             if rating == "DISLIKE" and "המידע אינו מדויק או שגוי" in (reasons or []):
                 row = connection.execute(
@@ -442,6 +465,68 @@ def get_chunk_score(chunk_id, database_path=DATABASE_PATH):
             "SELECT score FROM chunk_scores WHERE chunk_id=?", (chunk_id,)
         ).fetchone()
     return row["score"] if row else 1.0
+
+
+def get_chunk_scores(chunk_ids, database_path=DATABASE_PATH):
+    """Scores for many chunks in a single query; missing chunks default to 1.0."""
+    if not chunk_ids:
+        return {}
+    placeholders = ",".join("?" * len(chunk_ids))
+    with closing(_connect(database_path)) as connection:
+        rows = connection.execute(
+            f"SELECT chunk_id, score FROM chunk_scores WHERE chunk_id IN ({placeholders})",
+            list(chunk_ids),
+        ).fetchall()
+    scores = {row["chunk_id"]: row["score"] for row in rows}
+    return {chunk_id: scores.get(chunk_id, 1.0) for chunk_id in chunk_ids}
+
+
+ANSWER_CACHE_DAYS = 7
+
+
+def get_cached_answer(cache_key, database_path=DATABASE_PATH):
+    with closing(_connect(database_path)) as connection:
+        row = connection.execute(
+            """
+            SELECT answer, sources_json, chunk_ids_json, prompt_text, follow_up_questions_json
+            FROM answer_cache
+            WHERE cache_key = ? AND created_at >= datetime('now', ?)
+            """,
+            (cache_key, f"-{ANSWER_CACHE_DAYS} days"),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "answer": row["answer"],
+        "sources": json.loads(row["sources_json"] or "[]"),
+        "chunk_ids": json.loads(row["chunk_ids_json"] or "[]"),
+        "prompt_text": row["prompt_text"] or "",
+        "follow_up_questions": json.loads(row["follow_up_questions_json"] or "[]"),
+    }
+
+
+def save_cached_answer(
+    cache_key, answer, sources, chunk_ids, prompt_text, follow_up_questions,
+    database_path=DATABASE_PATH,
+):
+    with closing(_connect(database_path)) as connection:
+        with connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO answer_cache (
+                    cache_key, answer, sources_json, chunk_ids_json,
+                    prompt_text, follow_up_questions_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cache_key, answer,
+                    json.dumps(sources or [], ensure_ascii=False),
+                    json.dumps(chunk_ids or [], ensure_ascii=False),
+                    prompt_text,
+                    json.dumps(follow_up_questions or [], ensure_ascii=False),
+                ),
+            )
 
 
 def get_negative_feedback(limit=50, database_path=DATABASE_PATH):
