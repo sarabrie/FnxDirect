@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from multiprocessing import AuthenticationError
 from multiprocessing.connection import Listener
 
 from fnx_direct.config import ROOT_DIR, WARMUP_TIMES_PATH
@@ -107,12 +108,35 @@ def _save_measured_durations():
         pass
 
 
+_MAX_STRAY_CONNECTIONS = 20
+
+
+def _accept_worker(listener):
+    """Waits for the worker. A connection that fails the authkey handshake is ignored, not fatal."""
+    for _ in range(_MAX_STRAY_CONNECTIONS):
+        try:
+            return listener.accept()
+        except (AuthenticationError, EOFError, OSError) as error:
+            if failed.is_set():  # watch_worker closed the listener: the worker died
+                raise RuntimeError("the search worker exited before connecting") from error
+            print(f"[search] ignored a connection that failed the handshake: {type(error).__name__}: {error}", flush=True)
+    raise RuntimeError(f"{_MAX_STRAY_CONNECTIONS} connections failed the handshake")
+
+
 def _run():
     global client
     authkey = secrets.token_bytes(32)
-    listener = Listener(("127.0.0.1", 0), authkey=authkey)
+    # No TCP port: a Unix socket file (Linux) / named pipe (Windows) that only this machine can open.
+    # A TCP port here was picked up by Render's open-port scan, whose HTTP probe broke the handshake
+    # ("OSError: bad message length") and took the whole search engine down.
+    listener = Listener(authkey=authkey)
+    print(
+        f"[search] loading started — worker channel {listener.address} "
+        f"(not a TCP port; web server PORT={os.getenv('PORT', '-')})",
+        flush=True,
+    )
     worker = subprocess.Popen(
-        [sys.executable, "-m", "fnx_direct.search.worker", str(listener.address[1])],
+        [sys.executable, "-m", "fnx_direct.search.worker", str(listener.address)],
         cwd=ROOT_DIR,
         env={**os.environ, AUTHKEY_ENV: authkey.hex()},
     )
@@ -123,13 +147,13 @@ def _run():
         code = worker.wait()
         if not ready.is_set():
             # -9 (SIGKILL) usually means the server ran out of memory.
-            print(f"Search worker exited before it was ready (exit code {code})", flush=True)
+            print(f"[search] worker exited before it was ready (exit code {code})", flush=True)
             failed.set()
             listener.close()
 
     threading.Thread(target=watch_worker, name="search-worker-watch", daemon=True).start()
     try:
-        conn = listener.accept()
+        conn = _accept_worker(listener)
         while True:
             kind, payload = conn.recv()
             if kind == "stage":
@@ -142,10 +166,14 @@ def _run():
             else:
                 raise RuntimeError(payload)
         _save_measured_durations()
-        print("מודל החיפוש נטען ומוכן.", flush=True)
+        print(
+            f"[search] loading finished in {time.time() - started_at:.1f}s — "
+            f"{client.count()} chunks ready (worker channel {listener.address})",
+            flush=True,
+        )
     except Exception as error:
         failed.set()
-        print(f"Search engine failed to start: {type(error).__name__}: {error}", flush=True)
+        print(f"[search] loading FAILED: {type(error).__name__}: {error}", flush=True)
     finally:
         listener.close()
 

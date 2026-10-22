@@ -3,15 +3,17 @@ Search engine process: owns ChromaDB and the embedding model.
 
 Loading them is CPU-heavy and, inside the website's own process, it starved every page render
 (Python runs one thread at a time). Here it runs on its own core. Started by engine.start();
-reports its loading stages, then answers queries over a local socket.
+reports its loading stages, then answers queries over a local channel — a Unix socket file
+(Linux) or a named pipe (Windows), never a TCP port, so port scans can't reach it.
 
 Messages to the website:   ("stage", name) · ("ready", info) · ("error", text)
 Requests from the website: ("query", kwargs for collection.query) -> ("ok", result) | ("error", text)
 
-Run as a module (python -m fnx_direct.search.worker <port>) from the project root.
+Run as a module (python -m fnx_direct.search.worker <listener address>) from the project root.
 """
 import os
 import sys
+import time
 from multiprocessing.connection import Client
 
 from fnx_direct.config import COLLECTION_NAME, VECTOR_DB_PATH
@@ -63,8 +65,21 @@ def _query(collection, embed, kwargs):
     return collection.query(**kwargs)
 
 
-def main(port, authkey):
-    conn = Client(("127.0.0.1", port), authkey=authkey)
+def _connect(address, authkey, attempts=40, delay=0.25):
+    """The listener exists before this process starts; retry briefly anyway (e.g. a slow disk)."""
+    for attempt in range(attempts):
+        try:
+            return Client(address, authkey=authkey)
+        except OSError as error:  # socket file / pipe not available yet, or busy
+            if attempt == attempts - 1:
+                raise
+            print(f"[search worker] channel not ready ({type(error).__name__}), retrying", flush=True)
+            time.sleep(delay)
+
+
+def main(address, authkey):
+    conn = _connect(address, authkey)
+    print(f"[search worker] connected to {address}, loading the model", flush=True)
     try:
         collection, embed = _load(conn)
     except Exception as error:
@@ -84,4 +99,5 @@ def main(port, authkey):
 
 
 if __name__ == "__main__":
-    main(int(sys.argv[1]), bytes.fromhex(os.environ[AUTHKEY_ENV]))
+    # argv[1]: the listener's address (Unix socket path / Windows pipe name); the key comes via env.
+    main(sys.argv[1], bytes.fromhex(os.environ[AUTHKEY_ENV]))
