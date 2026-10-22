@@ -316,8 +316,8 @@ def render_landing():
 
         st.markdown('</div>', unsafe_allow_html=True)  # card
 
-        with hero_col:
-                st.markdown("""
+    with hero_col:
+        st.markdown("""
                 <div class="hero-kicker">מידע ברור, במקום אחד</div>
                 <div class="hero-title">ביטוח, קצת<br>יותר פשוט.</div>
                 <div class="hero-sub">שאלו על הכיסויים, התביעות והשירות שלכם. העוזר של הפניקס יכוון אתכם למידע הרלוונטי באתר, בשפה ברורה ובכל שעה.</div>
