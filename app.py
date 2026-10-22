@@ -140,6 +140,13 @@ def resolve_pending_db_writes():
     return errors
 
 
+@st.fragment(run_every=1)
+def rerun_when_db_writes_complete():
+    pending_writes = st.session_state.get("_pending_db_writes", {})
+    if any(pending["future"].done() for pending in pending_writes.values()):
+        st.rerun()
+
+
 load_dotenv()
 
 st.set_page_config(
@@ -147,6 +154,10 @@ st.set_page_config(
     page_icon="✳",
     layout="centered",
 )
+
+if st.query_params.get("admin") != "1":
+    get_collection_loader()
+    warm_gemini_client()
 
 _background_write_errors = resolve_pending_db_writes()
 
@@ -194,8 +205,6 @@ if conversation_owner_id is None:
 
 # ─── Conversation routing ─────────────────────────────────────────────────────
 requested_conversation_id = st.query_params.get("conversation")
-get_collection_loader()
-warm_gemini_client()
 
 if (
     requested_conversation_id
@@ -357,6 +366,9 @@ else:
         st.session_state["has_older_messages"] = has_older_messages
         st.rerun()
     app_ui.render_messages(st.session_state.messages, on_feedback=_on_feedback)
+
+if st.session_state.get("_pending_db_writes"):
+    rerun_when_db_writes_complete()
 
 typed_question = st.chat_input("כתבו את השאלה שלכם...")
 question = typed_question or selected_question

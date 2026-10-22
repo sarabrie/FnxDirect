@@ -57,8 +57,10 @@ class PooledConnection:
 
 def connect(cursor_factory=None) -> PooledConnection:
     connection_pool = get_connection_pool()
-    return PooledConnection(
-        connection_pool,
-        connection_pool.getconn(),
-        cursor_factory=cursor_factory,
-    )
+    conn = connection_pool.getconn()
+    try:
+        conn.cursor().execute("SELECT 1")
+    except Exception:
+        connection_pool.putconn(conn, close=True)
+        conn = connection_pool.getconn()
+    return PooledConnection(connection_pool, conn, cursor_factory=cursor_factory)
