@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import ssl
 from pathlib import Path
 import time
@@ -43,6 +44,16 @@ def _query_results(results, key):
         return []
     first_result = values[0]
     return first_result if isinstance(first_result, list) else []
+
+
+def _split_follow_ups(text):
+    pattern = r"\[FOLLOW_UP\](.*?)\[/FOLLOW_UP\]"
+    follow_ups = [
+        " ".join(match.split())
+        for match in re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+    ]
+    answer = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    return answer, list(dict.fromkeys(follow_ups))[:3]
 
 
 def _source_url(metadata):
@@ -99,7 +110,7 @@ def generate_rag_response(question, collection, user_prefs=None):
     """Returns (answer_text, sources, chunk_ids, prompt_text)."""
     result_count = min(10, collection.count())
     if result_count == 0:
-        return "זה לא כתוב באתר הפניקס.", [], [], ""
+        return "זה לא כתוב באתר הפניקס.", [], [], "", []
 
     results = collection.query(query_texts=[question], n_results=result_count)
     documents = results.get("documents", [[]])[0]
@@ -107,7 +118,7 @@ def generate_rag_response(question, collection, user_prefs=None):
     ids = results.get("ids", [[]])[0]
 
     if not documents:
-        return "זה לא כתוב באתר הפניקס.", [], [], ""
+        return "זה לא כתוב באתר הפניקס.", [], [], "", []
 
     context_text = ""
     sources = []
@@ -139,7 +150,7 @@ def generate_rag_response(question, collection, user_prefs=None):
         chunk_ids.append(chunk_id)
 
     if not context_text:
-        return "זה לא כתוב באתר הפניקס.", [], [], ""
+        return "זה לא כתוב באתר הפניקס.", [], [], "", []
 
     prefs = user_prefs or {}
     preferred_name = prefs.get("preferred_name")
@@ -168,6 +179,7 @@ def generate_rag_response(question, collection, user_prefs=None):
 בדוק את כל הקטעים לפני המענה. מידע עשוי להופיע תחת כותרת אחרת או בניסוח שונה מהשאלה.
 אם קטע עונה על חלק מהשאלה, מסור את המידע הנתמך וציין אילו פרטים אינם מופיעים.
 אל תוסיף עובדות שאינן מופיעות בקטעים. אם אף קטע אינו מכיל מידע רלוונטי, ענה בדיוק: "זה לא כתוב באתר הפניקס."
+בסוף התשובה, הוסף עד 3 הצעות המשך קצרות ומזמינות, בנושאים שונים שאפשר לענות עליהם מתוך הקטעים המצורפים. נסח כל הצעה כהזמנה, למשל: "רוצה לדעת גם איך מגישים תביעה?", ולא כשאלת מידע ישירה. הצע רק נושאים שיש עליהם מידע נוסף בקטעים; אם יש רק נושא אחד רלוונטי, הצע רק אותו. כתוב כל הצעה בנפרד ובפורמט המדויק [FOLLOW_UP]רוצה לדעת גם...?[/FOLLOW_UP], אחרי התשובה.
 המקורות יוצגו בנפרד מהתשובה.
 
 החזר תשובה בפורמט JSON בלבד (ללא markdown, ללא ```json), לפי המבנה הבא:
@@ -192,20 +204,10 @@ def generate_rag_response(question, collection, user_prefs=None):
                 model="gemini-3.8-flash", contents=prompt, config=config
             )
             client.close()
-            raw = (response.text or "").strip()
-            # Strip optional markdown code fences
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            try:
-                parsed = json.loads(raw)
-                answer = parsed.get("answer") or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
-                suggested_questions = [
-                    q for q in parsed.get("suggested_questions", []) if isinstance(q, str) and q.strip()
-                ][:3]
-            except (json.JSONDecodeError, AttributeError):
-                answer = raw or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
-                suggested_questions = []
-            return answer, sources, chunk_ids, prompt, suggested_questions
+            answer, follow_up_questions = _split_follow_ups(
+                response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
+            )
+            return answer, sources, chunk_ids, prompt, follow_up_questions
         except Exception as e:
             client.close()
             last_error = e

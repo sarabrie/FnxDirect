@@ -7,6 +7,11 @@ services:
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in .env}
       FIRE_CRAWL_API_KEY: ${FIRE_CRAWL_API_KEY:-}
+      BASE_URL: ${BASE_URL:?Set BASE_URL in .env}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+      ADMIN_SECRET: ${ADMIN_SECRET:-}
       CHAT_HISTORY_DB_PATH: /data/chat_history.sqlite3
       AUTH_DB_PATH: /data/auth.sqlite3
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
