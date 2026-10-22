@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sqlite3
+import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -86,6 +87,11 @@ def init_auth_db():
                 created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_uh_user_created ON user_history(user_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS google_oauth_states (
+                state_hash TEXT PRIMARY KEY,
+                expires_at INTEGER NOT NULL
+            );
         """)
         conn.commit()
         # Migrate existing user_preferences rows — add columns if missing
@@ -232,11 +238,54 @@ def get_user_by_id(user_id: str) -> dict | None:
 
 # ─── Google OAuth ──────────────────────────────────────────────────────────────
 
-def build_google_auth_url() -> str | None:
-    client_id = os.getenv("GOOGLE_CLIENT_ID")
-    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8501")
-    if not client_id:
+GOOGLE_CALLBACK_PATH = "/auth_google_callback"
+
+
+def get_google_redirect_uri() -> str | None:
+    configured_uri = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+    if configured_uri:
+        return configured_uri
+
+    base_url = os.getenv("BASE_URL", "").strip().rstrip("/")
+    if not base_url:
         return None
+    return f"{base_url}{GOOGLE_CALLBACK_PATH}"
+
+
+def create_google_oauth_state() -> str:
+    state = secrets.token_urlsafe(32)
+    state_hash = hashlib.sha256(state.encode()).hexdigest()
+    expires_at = int(time.time()) + 600
+
+    with closing(_connect()) as conn:
+        with conn:
+            conn.execute("DELETE FROM google_oauth_states WHERE expires_at <= ?", (int(time.time()),))
+            conn.execute(
+                "INSERT INTO google_oauth_states (state_hash, expires_at) VALUES (?, ?)",
+                (state_hash, expires_at),
+            )
+    return state
+
+
+def consume_google_oauth_state(state: str) -> bool:
+    state_hash = hashlib.sha256(state.encode()).hexdigest()
+    with closing(_connect()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT expires_at FROM google_oauth_states WHERE state_hash = ?",
+            (state_hash,),
+        ).fetchone()
+        conn.execute("DELETE FROM google_oauth_states WHERE state_hash = ?", (state_hash,))
+        conn.commit()
+    return row is not None and row["expires_at"] > int(time.time())
+
+
+def build_google_auth_url(state: str | None = None) -> str | None:
+    client_id = os.getenv("GOOGLE_CLIENT_ID")
+    redirect_uri = get_google_redirect_uri()
+    if not client_id or not redirect_uri:
+        return None
+    state = state or create_google_oauth_state()
     from urllib.parse import urlencode
     params = {
         "client_id": client_id,
@@ -245,6 +294,7 @@ def build_google_auth_url() -> str | None:
         "scope": "openid email profile",
         "access_type": "offline",
         "prompt": "select_account",
+        "state": state,
     }
     return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
 
@@ -254,8 +304,8 @@ def login_or_register_google(code: str) -> tuple[str, str] | str:
     import requests as _requests
     client_id = os.getenv("GOOGLE_CLIENT_ID")
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8501")
-    if not client_id or not client_secret:
+    redirect_uri = get_google_redirect_uri()
+    if not client_id or not client_secret or not redirect_uri:
         return "חסרות הגדרות Google OAuth בקובץ .env."
 
     # Exchange code for tokens
@@ -285,8 +335,8 @@ def login_or_register_google(code: str) -> tuple[str, str] | str:
     email = info.get("email", "").lower().strip()
     display_name = info.get("name") or email.split("@")[0]
 
-    if not google_sub or not email:
-        return "לא ניתן לקבל פרטי משתמש מ -Google."
+    if not google_sub or not email or not info.get("email_verified"):
+        return "לא ניתן לקבל פרטי משתמש מאומתים מ-Google."
 
     with closing(_connect()) as conn:
         # Find by provider_id first, then by email

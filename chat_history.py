@@ -37,11 +37,20 @@ def initialize_history(database_path=DATABASE_PATH):
                 sources_json TEXT NOT NULL DEFAULT '[]',
                 chunk_ids_json TEXT NOT NULL DEFAULT '[]',
                 prompt_text TEXT,
+                follow_up_question TEXT,
+                follow_up_questions_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE INDEX IF NOT EXISTS messages_conversation_id_idx
                 ON messages(conversation_id, id);
+
+            CREATE TABLE IF NOT EXISTS hidden_conversations (
+                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL,
+                hidden_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (conversation_id, user_id)
+            );
 
             CREATE TABLE IF NOT EXISTS message_feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +79,12 @@ def initialize_history(database_path=DATABASE_PATH):
             connection.execute("ALTER TABLE messages ADD COLUMN chunk_ids_json TEXT NOT NULL DEFAULT '[]'")
         if "prompt_text" not in existing_cols:
             connection.execute("ALTER TABLE messages ADD COLUMN prompt_text TEXT")
+        if "follow_up_question" not in existing_cols:
+            connection.execute("ALTER TABLE messages ADD COLUMN follow_up_question TEXT")
+        if "follow_up_questions_json" not in existing_cols:
+            connection.execute(
+                "ALTER TABLE messages ADD COLUMN follow_up_questions_json TEXT NOT NULL DEFAULT '[]'"
+            )
         conv_cols = {row[1] for row in connection.execute("PRAGMA table_info(conversations)").fetchall()}
         if "user_id" not in conv_cols:
             connection.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT")
@@ -90,62 +105,122 @@ def new_conversation_id():
     return str(uuid4())
 
 
-def conversation_exists(conversation_id, database_path=DATABASE_PATH):
+def conversation_exists(conversation_id, database_path=DATABASE_PATH, user_id=None):
+    owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
         row = connection.execute(
-            "SELECT 1 FROM conversations WHERE id = ?",
-            (conversation_id,),
+            """
+            SELECT 1
+            FROM conversations c
+            WHERE c.id = ? AND c.user_id IS ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM hidden_conversations h
+                  WHERE h.conversation_id = c.id AND h.user_id = ?
+              )
+            """,
+            (conversation_id, user_id, owner_key),
         ).fetchone()
     return row is not None
 
 
-def list_conversations(limit=20, database_path=DATABASE_PATH, user_id=None):
+def conversation_is_hidden(conversation_id, database_path=DATABASE_PATH, user_id=None):
+    owner_key = user_id if user_id is not None else "__guest__"
     with closing(_connect(database_path)) as connection:
-        if user_id:
-            rows = connection.execute(
-                """
-                SELECT id, title, updated_at
-                FROM conversations
-                WHERE user_id = ?
-                ORDER BY updated_at DESC, created_at DESC
-                LIMIT ?
-                """,
-                (user_id, limit),
-            ).fetchall()
-        else:
-            rows = connection.execute(
-                """
-                SELECT id, title, updated_at
-                FROM conversations
-                WHERE user_id IS NULL
-                ORDER BY updated_at DESC, created_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-    return [dict(row) for row in rows]
+        row = connection.execute(
+            """
+            SELECT 1 FROM hidden_conversations
+            WHERE conversation_id = ? AND user_id = ?
+            """,
+            (conversation_id, owner_key),
+        ).fetchone()
+    return row is not None
 
 
-def load_messages(conversation_id, database_path=DATABASE_PATH):
+def list_conversations(
+    limit=20,
+    database_path=DATABASE_PATH,
+    user_id=None,
+    search_query="",
+):
+    owner_key = user_id if user_id is not None else "__guest__"
+    escaped_query = search_query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    search_pattern = f"%{escaped_query}%"
     with closing(_connect(database_path)) as connection:
         rows = connection.execute(
             """
-            SELECT id, role, content, sources_json
+            SELECT c.id, c.title, c.updated_at
+            FROM conversations c
+            WHERE c.user_id IS ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM hidden_conversations h
+                  WHERE h.conversation_id = c.id AND h.user_id = ?
+              )
+              AND (
+                  ? = ''
+                  OR c.title LIKE ? ESCAPE '\\'
+                  OR EXISTS (
+                      SELECT 1
+                      FROM messages m
+                      WHERE m.conversation_id = c.id
+                        AND m.content LIKE ? ESCAPE '\\'
+                  )
+              )
+            ORDER BY c.updated_at DESC, c.created_at DESC
+            LIMIT ?
+            """,
+            (
+                user_id,
+                owner_key,
+                search_query.strip(),
+                search_pattern,
+                search_pattern,
+                limit,
+            ),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def load_messages(conversation_id, database_path=DATABASE_PATH, user_id=None):
+    owner_key = user_id if user_id is not None else "__guest__"
+    with closing(_connect(database_path)) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, role, content, sources_json, follow_up_question, follow_up_questions_json
             FROM messages
             WHERE conversation_id = ?
+              AND EXISTS (
+                  SELECT 1 FROM conversations
+                  WHERE conversations.id = messages.conversation_id
+                    AND conversations.user_id IS ?
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM hidden_conversations
+                  WHERE hidden_conversations.conversation_id = messages.conversation_id
+                    AND hidden_conversations.user_id = ?
+              )
             ORDER BY id
             """,
-            (conversation_id,),
+            (conversation_id, user_id, owner_key),
         ).fetchall()
-    return [
-        {
+    messages = []
+    for row in rows:
+        try:
+            follow_up_questions = json.loads(row["follow_up_questions_json"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            follow_up_questions = []
+        if not isinstance(follow_up_questions, list):
+            follow_up_questions = []
+        if not follow_up_questions and row["follow_up_question"]:
+            follow_up_questions = [row["follow_up_question"]]
+        messages.append({
             "role": row["role"],
             "content": row["content"],
             "sources": json.loads(row["sources_json"]),
+            "follow_up_questions": follow_up_questions,
             "message_id": row["id"] if row["role"] == "assistant" else None,
-        }
-        for row in rows
-    ]
+        })
+    return messages
 
 
 def save_message(
@@ -157,23 +232,54 @@ def save_message(
     conversation_title=None,
     chunk_ids=None,
     prompt_text=None,
+    follow_up_question=None,
+    follow_up_questions=None,
     user_id=None,
 ):
     sources_json = json.dumps(sources or [], ensure_ascii=False)
     chunk_ids_json = json.dumps(chunk_ids or [], ensure_ascii=False)
+    if follow_up_questions is None:
+        follow_up_questions = [follow_up_question] if follow_up_question else []
+    follow_up_questions_json = json.dumps(
+        [item for item in follow_up_questions if isinstance(item, str) and item.strip()],
+        ensure_ascii=False,
+    )
     title = " ".join((conversation_title or content).split())[:48]
     with closing(_connect(database_path)) as connection:
         with connection:
-            connection.execute(
-                "INSERT INTO conversations (id, user_id) VALUES (?, ?) ON CONFLICT(id) DO NOTHING",
-                (conversation_id, user_id),
-            )
+            conversation = connection.execute(
+                "SELECT user_id FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if conversation is None:
+                connection.execute(
+                    "INSERT INTO conversations (id, user_id) VALUES (?, ?)",
+                    (conversation_id, user_id),
+                )
+            elif conversation["user_id"] != user_id:
+                raise ValueError("השיחה אינה שייכת למשתמש הנוכחי.")
+            elif connection.execute(
+                """
+                SELECT 1 FROM hidden_conversations
+                WHERE conversation_id = ? AND user_id = ?
+                """,
+                (conversation_id, user_id if user_id is not None else "__guest__"),
+            ).fetchone():
+                raise ValueError("השיחה הוסרה מההיסטוריה.")
             cursor = connection.execute(
                 """
-                INSERT INTO messages (conversation_id, role, content, sources_json, chunk_ids_json, prompt_text)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO messages (
+                    conversation_id, role, content, sources_json,
+                    chunk_ids_json, prompt_text, follow_up_question,
+                    follow_up_questions_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (conversation_id, role, content, sources_json, chunk_ids_json, prompt_text),
+                (
+                    conversation_id, role, content, sources_json,
+                    chunk_ids_json, prompt_text, follow_up_question,
+                    follow_up_questions_json,
+                ),
             )
             connection.execute(
                 """
@@ -190,13 +296,52 @@ def save_message(
     return cursor.lastrowid
 
 
-def delete_conversation(conversation_id, database_path=DATABASE_PATH):
+def rename_conversation(
+    conversation_id,
+    title,
+    database_path=DATABASE_PATH,
+    user_id=None,
+):
+    title = " ".join(title.split())[:48]
+    if not title:
+        raise ValueError("כותרת השיחה אינה יכולה להיות ריקה.")
+
     with closing(_connect(database_path)) as connection:
         with connection:
-            connection.execute(
-                "DELETE FROM conversations WHERE id = ?",
-                (conversation_id,),
+            cursor = connection.execute(
+                """
+                UPDATE conversations
+                SET title = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id IS ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM hidden_conversations
+                      WHERE conversation_id = conversations.id AND user_id = ?
+                  )
+                """,
+                (
+                    title,
+                    conversation_id,
+                    user_id,
+                    user_id if user_id is not None else "__guest__",
+                ),
             )
+    return cursor.rowcount == 1
+
+
+def hide_conversation(conversation_id, database_path=DATABASE_PATH, user_id=None):
+    owner_key = user_id if user_id is not None else "__guest__"
+    with closing(_connect(database_path)) as connection:
+        with connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO hidden_conversations (conversation_id, user_id)
+                SELECT id, ?
+                FROM conversations
+                WHERE id = ? AND user_id IS ?
+                """,
+                (owner_key, conversation_id, user_id),
+            )
+    return cursor.rowcount == 1
 
 
 def get_last_message_id(conversation_id, role="assistant", database_path=DATABASE_PATH):
