@@ -11,6 +11,7 @@ venv/
 data/*.sqlite3
 data/*.sqlite3-*
 data/.warmup_seconds
+data/embedder/
 
 # Editors
 .vscode/

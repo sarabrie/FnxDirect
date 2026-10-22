@@ -69,7 +69,10 @@ in Google Cloud Console. Do not commit `.env`; configure the same values as secr
 environment variables in the cloud deployment.
 
 The first image build downloads the multilingual embedding model (about 480 MB)
-into the image. The search engine loads in its own process while the user signs in.
+into the image and builds a memory-lean copy of it for the search engine
+(`python -m fnx_direct.search.embedder`), so the whole app fits in 512 MB of RAM.
+Run the same command once locally too; without it the search engine uses the full
+model (~1.2 GB at load). The search engine loads in its own process while the user signs in.
 
 ### Google sign-in for local development
 

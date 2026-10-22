@@ -13,6 +13,8 @@ DATA_DIR = ROOT_DIR / "data"
 VECTOR_DB_PATH = DATA_DIR / "fnx_db"
 COLLECTION_NAME = "fnx_website_chunks_multilingual"
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+# Memory-lean copy of the embedding model, built by `python -m fnx_direct.search.embedder`.
+EMBEDDER_DIR = Path(os.getenv("FNX_EMBEDDER_DIR", DATA_DIR / "embedder"))
 
 # ── SQLite databases (Docker points these at a persistent volume) ────────────
 CHAT_HISTORY_DB_PATH = Path(os.getenv("CHAT_HISTORY_DB_PATH", DATA_DIR / "chat_history.sqlite3"))
