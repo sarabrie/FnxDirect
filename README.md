@@ -30,6 +30,26 @@ The first image build downloads the multilingual embedding model (about 480 MB)
 into the image. The app page appears without waiting for the model; it loads the
 already-downloaded model when the first question is submitted.
 
+### Google sign-in for local development
+
+In Google Cloud Console, configure the OAuth client with this authorized
+JavaScript origin:
+
+```text
+http://localhost:8501
+```
+
+Add this exact authorized redirect URI:
+
+```text
+http://localhost:8501/auth_google_callback
+```
+
+Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `BASE_URL=http://localhost:8501`,
+and `GOOGLE_REDIRECT_URI=http://localhost:8501/auth_google_callback` in the
+local `.env` file, then restart the app. Keep `.env` out of Git. Use the public
+HTTPS origin and matching callback URI for a deployed environment.
+
 The ChromaDB index is mounted from `fnx_db` and the conversation history is stored
 in the `chat_history_data` Docker volume. Both persist when the container restarts.
 Users can search their conversation history, rename conversations, and hide them
