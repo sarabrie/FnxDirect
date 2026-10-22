@@ -1,202 +1,48 @@
-import logging
-from concurrent.futures import ThreadPoolExecutor
-from time import perf_counter
-from uuid import uuid4
-
-_APP_STARTED_AT = perf_counter()
-_PERF_LOGGER = logging.getLogger("fnxdirect.performance")
-
 import os
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
 from dotenv import load_dotenv
+load_dotenv()
+
 import streamlit as st
 import app_ui
 import admin_ui
 import auth_ui
-import landing_ui
+from routes import landing_page
 from auth_db import init_auth_db, get_bot_preferences
-from assistant_service import create_collection, generate_rag_response, warm_gemini_client
-from performance import timed
 from chat_history import (
     conversation_exists,
     conversation_is_hidden,
     hide_conversation,
     initialize_history,
     list_conversations,
-    load_messages_page,
+    load_messages,
     new_conversation_id,
     rename_conversation,
     save_message,
     save_feedback,
 )
 
-MESSAGE_PAGE_SIZE = 50
-
-_PERF_LOGGER.info(
-    "performance phase=app.import duration_ms=%.2f",
-    (perf_counter() - _APP_STARTED_AT) * 1000,
-)
-
-@st.cache_resource
-def get_collection_loader():
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fnxdirect-rag")
-    started_at = perf_counter()
-    future = executor.submit(_load_collection, started_at)
-    return executor, future
-
-
-def _load_collection(started_at):
-    try:
-        return create_collection()
-    except Exception as error:
-        _PERF_LOGGER.error(
-            "collection_load_failed error_type=%s",
-            type(error).__name__,
-        )
-        raise
-    finally:
-        _PERF_LOGGER.info(
-            "performance phase=app.load_collection duration_ms=%.2f",
-            (perf_counter() - started_at) * 1000,
-        )
-        _PERF_LOGGER.info(
-            "performance phase=app.startup_to_collection duration_ms=%.2f",
-            (perf_counter() - _APP_STARTED_AT) * 1000,
-        )
-
-
-def get_collection():
-    _, future = get_collection_loader()
-    try:
-        return future.result()
-    except Exception:
-        get_collection_loader.clear()
-        raise
-
-
-@st.cache_data(ttl=15, show_spinner=False)
-def get_cached_conversations(user_id, search_query):
-    return list_conversations(user_id=user_id, search_query=search_query)
-
-
-@st.cache_data(ttl=60, show_spinner=False)
-def get_cached_bot_preferences(user_id):
-    return get_bot_preferences(user_id)
-
-
-@st.cache_resource(show_spinner=False)
-def get_db_write_executor():
-    return ThreadPoolExecutor(max_workers=1, thread_name_prefix="fnxdirect-db")
-
-
-def queue_db_write(operation, function, *args, message_write_id=None, **kwargs):
-    future = get_db_write_executor().submit(function, *args, **kwargs)
-    pending_writes = st.session_state.setdefault("_pending_db_writes", {})
-    pending_writes[uuid4().hex] = {
-        "future": future,
-        "operation": operation,
-        "message_write_id": message_write_id,
-    }
-
-
-def resolve_pending_db_writes():
-    pending_writes = st.session_state.get("_pending_db_writes", {})
-    remaining_writes = {}
-    errors = []
-    for write_id, pending in pending_writes.items():
-        future = pending["future"]
-        if not future.done():
-            remaining_writes[write_id] = pending
-            continue
-
-        message_write_id = pending["message_write_id"]
-        try:
-            result = future.result()
-        except Exception as error:
-            _PERF_LOGGER.error(
-                "background_db_write_failed operation=%s error_type=%s",
-                pending["operation"],
-                type(error).__name__,
-            )
-            errors.append("שמירת מידע נכשלה. אפשר לנסות שוב בעוד רגע.")
-            if message_write_id:
-                for message in st.session_state.get("messages", []):
-                    if message.get("_write_id") == message_write_id:
-                        message.pop("_write_id", None)
-                        message["_write_error"] = True
-                        break
-        else:
-            if message_write_id:
-                for message in st.session_state.get("messages", []):
-                    if message.get("_write_id") == message_write_id:
-                        message.pop("_write_id", None)
-                        message["message_id"] = result
-                        break
-            if pending["operation"] == "assistant_message":
-                get_cached_conversations.clear()
-
-    st.session_state["_pending_db_writes"] = remaining_writes
-    return errors
-
-
-@st.fragment(run_every=1)
-def rerun_when_db_writes_complete():
-    pending_writes = st.session_state.get("_pending_db_writes", {})
-    if any(pending["future"].done() for pending in pending_writes.values()):
-        st.rerun()
-
-
-load_dotenv()
-
 st.set_page_config(
     page_title="הפניקס | עוזר אישי",
     page_icon="✳",
-    layout="centered",
+    layout="wide",
 )
 
-if st.query_params.get("admin") != "1":
-    get_collection_loader()
-    warm_gemini_client()
+init_auth_db()
+initialize_history()
 
-_background_write_errors = resolve_pending_db_writes()
+# ─── Auth state ───────────────────────────────────────────────────────────────
+user = auth_ui.get_current_user()
+if not user:
+    st.switch_page(landing_page)
+    st.stop()
 
-with timed("app.initialize_auth_db"):
-    init_auth_db()
-with timed("app.initialize_history"):
-    initialize_history()
-
-# ─── Admin panel ──────────────────────────────────────────────────────────────
+# Keep the legacy query route working, now behind authentication.
 if st.query_params.get("admin") == "1":
     admin_ui.render_admin_panel()
     st.stop()
 
-# ─── Google OAuth callback ───────────────────────────────────────────────────
-if "code" in st.query_params and "state" not in st.query_params:
-    from auth_db import login_or_register_google
-    _code = st.query_params["code"]
-    st.query_params.clear()
-    _result = login_or_register_google(_code)
-    if isinstance(_result, str):
-        st.error(_result)
-    else:
-        auth_ui._save_session(*_result)
-        st.session_state.pop("show_auth", None)
-        st.rerun()
-
-# ─── Landing page ─────────────────────────────────────────────────────────────
-if not st.session_state.get("landing_done"):
-    # If already authenticated from a previous session, skip landing
-    _existing_user = auth_ui.get_current_user()
-    if _existing_user:
-        st.session_state["landing_done"] = True
-    else:
-        entered = landing_ui.render_landing()
-        if not entered:
-            st.stop()
-
-# ─── Auth state ───────────────────────────────────────────────────────────────
-user = auth_ui.get_current_user()
 user_id = user["sub"] if user else None
 conversation_owner_id = user_id
 if conversation_owner_id is None:
@@ -205,7 +51,6 @@ if conversation_owner_id is None:
 
 # ─── Conversation routing ─────────────────────────────────────────────────────
 requested_conversation_id = st.query_params.get("conversation")
-
 if (
     requested_conversation_id
     and (
@@ -234,22 +79,31 @@ if (
 ):
     st.session_state.conversation_id = conversation_id
     st.session_state.conversation_owner_id = conversation_owner_id
-    st.session_state.messages, has_older_messages = load_messages_page(
+    st.session_state.messages = load_messages(
         conversation_id,
         user_id=conversation_owner_id,
-        limit=MESSAGE_PAGE_SIZE,
     )
-    st.session_state["has_older_messages"] = has_older_messages
+
+
+@st.cache_resource
+def get_collection():
+    from assistant_service import create_collection
+
+    return create_collection()
+
+
 # ─── Header ──────────────────────────────────────────────────────────────────
 app_ui.render_header(user)
-for _write_error in _background_write_errors:
-    st.error(_write_error)
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 search_key = f"history_search_{conversation_owner_id}"
-conversations = get_cached_conversations(
-    conversation_owner_id,
-    st.session_state.get(search_key, ""),
+conversations = (
+    list_conversations(
+        user_id=conversation_owner_id,
+        search_query=st.session_state.get(search_key, ""),
+    )
+    if user
+    else []
 )
 sidebar_result = app_ui.render_sidebar(conversations, user, conversation_owner_id)
 sidebar_action, _ = sidebar_result
@@ -262,7 +116,6 @@ if sidebar_action:
         st.session_state.conversation_id = conversation_id
         st.session_state.conversation_owner_id = conversation_owner_id
         st.session_state.messages = []
-        st.session_state["has_older_messages"] = False
         st.query_params["conversation"] = conversation_id
     elif action == "preferences":
         st.session_state["show_preferences"] = not st.session_state.get("show_preferences", False)
@@ -275,7 +128,6 @@ if sidebar_action:
             title,
             user_id=conversation_owner_id,
         ):
-            get_cached_conversations.clear()
             st.session_state.pop("editing_conversation_id", None)
         else:
             st.error("לא ניתן לערוך את הכותרת של השיחה הזו.")
@@ -284,13 +136,11 @@ if sidebar_action:
             selected_conversation_id,
             user_id=conversation_owner_id,
         ):
-            get_cached_conversations.clear()
             st.session_state.pop("deleting_conversation_id", None)
             if selected_conversation_id == conversation_id:
                 conversation_id = new_conversation_id()
                 st.session_state.conversation_id = conversation_id
                 st.session_state.messages = []
-                st.session_state["has_older_messages"] = False
                 st.query_params["conversation"] = conversation_id
         else:
             st.error("לא ניתן להסיר את השיחה הזו מההיסטוריה.")
@@ -305,17 +155,24 @@ if st.session_state.get("show_preferences") and user:
     def _on_prefs_save(new_prefs):
         st.session_state["user_prefs"] = new_prefs
         st.session_state["show_preferences"] = False
-        get_cached_bot_preferences.clear()
 
     app_ui.render_preferences_panel(user, on_save=_on_prefs_save)
     st.stop()
 
 # ─── Load user prefs (cached in session) ─────────────────────────────────────
 if user and "user_prefs" not in st.session_state:
-    with timed("app.load_preferences"):
-        st.session_state["user_prefs"] = get_cached_bot_preferences(user["sub"])
+    st.session_state["user_prefs"] = get_bot_preferences(user["sub"])
 
 user_prefs = st.session_state.get("user_prefs") if user else None
+
+# ─── Collection load ──────────────────────────────────────────────────────────
+try:
+    with st.spinner("מכין את עוזר החיפוש. הטעינה הראשונה עשויה להימשך כחצי דקה..."):
+        collection = get_collection()
+except Exception as error:
+    print(f"שגיאה בטעינת מסד המידע: {type(error).__name__}: {error}")
+    st.error("לא הצלחתי לטעון את מודל החיפוש. בדקו את חיבור האינטרנט ונסו להפעיל מחדש.")
+    st.stop()
 
 # ─── Flush pending feedback ───────────────────────────────────────────────────
 for msg in st.session_state.messages:
@@ -325,9 +182,7 @@ for msg in st.session_state.messages:
     pending_key = f"fb_submit_{mid}"
     if pending_key in st.session_state:
         fb = st.session_state.pop(pending_key)
-        queue_db_write(
-            "feedback",
-            save_feedback,
+        save_feedback(
             message_id=mid,
             conversation_id=conversation_id,
             user_id=user["sub"] if user else None,
@@ -338,9 +193,7 @@ for msg in st.session_state.messages:
 
 # ─── Chat ─────────────────────────────────────────────────────────────────────
 def _on_feedback(message_id, rating, reasons, comment):
-    queue_db_write(
-        "feedback",
-        save_feedback,
+    save_feedback(
         message_id=message_id,
         conversation_id=conversation_id,
         user_id=user["sub"] if user else None,
@@ -352,52 +205,51 @@ def _on_feedback(message_id, rating, reasons, comment):
 if not st.session_state.messages:
     selected_question = app_ui.render_suggestions()
 else:
-    selected_question = None
-    if st.session_state.get("has_older_messages") and st.button(
-        "טען הודעות קודמות"
-    ):
-        older_messages, has_older_messages = load_messages_page(
-            conversation_id,
-            user_id=conversation_owner_id,
-            limit=MESSAGE_PAGE_SIZE,
-            before_id=st.session_state.messages[0]["_db_id"],
-        )
-        st.session_state.messages = older_messages + st.session_state.messages
-        st.session_state["has_older_messages"] = has_older_messages
-        st.rerun()
-    app_ui.render_messages(st.session_state.messages, on_feedback=_on_feedback)
+    selected_question = app_ui.render_messages(
+        st.session_state.messages,
+        on_feedback=_on_feedback,
+    )
 
-if st.session_state.get("_pending_db_writes"):
-    rerun_when_db_writes_complete()
+pending_error = st.session_state.get("pending_assistant_error")
+if pending_error and pending_error.get("conversation_id") == conversation_id:
+    st.error(pending_error["message"])
+    if st.button("נסה שוב", key=f"retry_{conversation_id}", type="primary"):
+        st.session_state["retry_question"] = pending_error["question"]
+        st.session_state.pop("pending_assistant_error", None)
+        st.rerun()
 
 typed_question = st.chat_input("כתבו את השאלה שלכם...")
-question = typed_question or selected_question
+retry_question = st.session_state.get("retry_question")
+question = typed_question or selected_question or retry_question
+is_retry = retry_question is not None and question == retry_question and not typed_question and not selected_question
 
 if question:
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
+    if is_retry:
+        st.session_state.pop("retry_question", None)
+    else:
+        st.session_state.pop("retry_question", None)
+        st.session_state.pop("pending_assistant_error", None)
+        st.session_state.messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
 
-    user_message_future = get_db_write_executor().submit(
-        save_message,
-        conversation_id,
-        "user",
-        question,
-        user_id=conversation_owner_id,
-    )
-    user_message_saved = False
+        save_message(
+            conversation_id,
+            "user",
+            question,
+            user_id=conversation_owner_id,
+        )
 
+    request_error = None
     with st.chat_message("assistant"):
         with st.spinner("מחפש מידע באתר הפניקס..."):
+            follow_up_questions = []
             try:
-                with st.spinner("מכין את עוזר החיפוש..."):
-                    with timed("app.wait_for_collection"):
-                        collection = get_collection()
-                response, sources, chunk_ids, prompt_text = generate_rag_response(
+                from assistant_service import generate_rag_response
+
+                response, sources, chunk_ids, prompt_text, follow_up_questions = generate_rag_response(
                     question, collection, user_prefs=user_prefs
                 )
-                user_message_future.result()
-                user_message_saved = True
                 if isinstance(response, str):
                     answer = response
                     st.markdown(answer)
@@ -410,66 +262,41 @@ if question:
                     sources = []
                     chunk_ids = []
             except RuntimeError as error:
-                _PERF_LOGGER.error(
-                    "rag.answer_failed error_type=%s",
-                    type(error).__name__,
-                )
-                if "GEMINI_API_KEY" in str(error):
-                    answer = "שירות יצירת התשובות אינו מוגדר כרגע."
-                else:
-                    answer = "לא הצלחתי להשלים את התשובה. נסו שוב בעוד רגע."
-                sources, chunk_ids, prompt_text = [], [], ""
+                answer, sources, chunk_ids, prompt_text = str(error), [], [], ""
+                follow_up_questions = []
                 st.markdown(answer)
+                request_error = answer
             except Exception as error:
-                _PERF_LOGGER.error(
-                    "rag.answer_failed error_type=%s",
-                    type(error).__name__,
-                )
+                print(f"שגיאה ביצירת תשובה: {type(error).__name__}: {error}")
                 if getattr(error, "code", None) == 429 or "429" in str(error) or "RESOURCE_EXHAUSTED" in str(error):
-                    answer = "מכסת השימוש ב-Gemini הסתיימה. נסו שוב לאחר איפוס המכסה."
+                    answer = "השירות עמוס כרגע. אפשר להמתין מעט ולנסות שוב."
                 else:
-                    answer = "לא הצלחתי להשלים את התשובה. נסו שוב בעוד רגע."
+                    answer = "לא הצלחנו לקבל תשובה כרגע. בדקו את החיבור ונסו שוב."
                 sources, chunk_ids, prompt_text = [], [], ""
+                follow_up_questions = []
                 st.markdown(answer)
-            finally:
-                if not user_message_saved:
-                    try:
-                        user_message_future.result()
-                        user_message_saved = True
-                    except Exception as error:
-                        _PERF_LOGGER.error(
-                            "background_db_write_failed operation=user_message error_type=%s",
-                            type(error).__name__,
-                        )
-                        answer = "לא הצלחתי לשמור את השאלה. נסו לשלוח אותה שוב."
-                        sources, chunk_ids, prompt_text = [], [], ""
-                        st.error(answer)
-                if user_message_saved:
-                    get_cached_conversations.clear()
+                request_error = answer
             app_ui.render_sources(sources)
 
-    client_write_id = uuid4().hex if user_message_saved else None
-    if user_message_saved:
-        queue_db_write(
-            "assistant_message",
-            save_message,
-            conversation_id,
-            "assistant",
-            answer,
-            sources,
-            chunk_ids=chunk_ids,
-            prompt_text=prompt_text,
+    if request_error:
+        st.session_state["pending_assistant_error"] = {
+            "conversation_id": conversation_id,
+            "question": question,
+            "message": request_error,
+        }
+    else:
+        st.session_state.pop("pending_assistant_error", None)
+        message_id = save_message(
+            conversation_id, "assistant", answer, sources,
+            chunk_ids=chunk_ids, prompt_text=prompt_text,
+            follow_up_questions=follow_up_questions,
             user_id=conversation_owner_id,
-            message_write_id=client_write_id,
         )
-    get_cached_conversations.clear()
-    assistant_message = {
-        "role": "assistant",
-        "content": answer,
-        "sources": sources,
-        "message_id": None,
-    }
-    if client_write_id:
-        assistant_message["_write_id"] = client_write_id
-    st.session_state.messages.append(assistant_message)
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": answer,
+            "sources": sources,
+            "follow_up_questions": follow_up_questions,
+            "message_id": message_id,
+        })
     st.rerun()

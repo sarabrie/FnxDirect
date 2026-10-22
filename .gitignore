@@ -4,13 +4,3 @@ __pycache__/
 chat_history.sqlite3
 chat_history.sqlite3-*
 .vscode/
-fnx_db/
-auth.sqlite3
-*.sqlite3
-$b64
-$out
-Get-ChildItem
-New-Item
-Set-Content
-python
-setx

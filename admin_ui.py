@@ -11,11 +11,15 @@ from chat_history import get_negative_feedback
 
 def render_admin_panel():
     secret = os.getenv("ADMIN_SECRET", "")
+    if not secret:
+        st.error("לוח הניהול אינו זמין עד להגדרת ADMIN_SECRET.")
+        return
+
     entered = st.text_input("סיסמת מנהל", type="password", key="admin_secret_input")
     if not entered:
         st.info("הזינו סיסמת מנהל כדי לצפות במשובים.")
         return
-    if secret and entered != secret:
+    if entered != secret:
         st.error("סיסמה שגויה.")
         return
 

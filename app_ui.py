@@ -1,8 +1,10 @@
 import html
 import re
+from datetime import date, datetime
 from urllib.parse import urlsplit
 import streamlit as st
-import auth_ui
+import streamlit.components.v1 as components
+from routes import history_page, logout_page
 
 DISLIKE_REASONS = [
     "המידע אינו מדויק או שגוי",
@@ -18,83 +20,110 @@ _CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');
 
 :root {
-    --ink: #172b2a;
-    --muted: #687775;
-    --green: #087e70;
-    --green-light: #e8f5f1;
-    --green-hover: #06665b;
-    --line: #dce5df;
-    --card-bg: #ffffff;
+    --ink: #142c32;
+    --muted: #5d7074;
+    --teal: #087f79;
+    --teal-dark: #08645f;
+    --teal-pale: #e5f4f1;
+    --gold: #d79a34;
+    --line: #d9e3e2;
+    --surface: #ffffff;
+    --canvas: #f5f8f7;
 }
 
 .stApp {
     direction: rtl;
     color: var(--ink);
-    background: radial-gradient(ellipse at 85% 0%, #e4f2e9 0, transparent 36%), #f7f8f5;
+    background:
+      radial-gradient(ellipse at 86% 0%, rgba(8,127,121,.075), transparent 32%),
+      var(--canvas);
     font-family: 'Heebo', sans-serif;
 }
 
 [data-testid="stSidebar"] {
-    background: #edf3ee;
+    background: #eef4f2;
     border-left: 1px solid var(--line);
 }
 
 [data-testid="stSidebar"] * { font-family: 'Heebo', sans-serif; }
-.block-container { max-width: 860px; padding-top: 2.5rem; padding-bottom: 8rem; }
+.block-container { max-width: 980px; padding: 2.5rem 2rem 7rem; }
+.stApp, .stApp button, .stApp input, .stApp textarea { font-family: 'Heebo', sans-serif; }
 
 .brand-mark {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 42px; height: 42px; border-radius: 13px;
-    color: white; background: var(--green); font-size: 23px; font-weight: 700;
-    box-shadow: 0 4px 10px rgba(8, 126, 112, 0.25);
+    width: 42px; height: 42px; border-radius: 12px;
+    color: white; background: var(--teal); font-size: 23px; font-weight: 700;
+    box-shadow: 0 4px 10px rgba(8,100,95,.20);
 }
 
-.eyebrow { color: var(--green); font-size: 13px; font-weight: 700; margin-bottom: 6px; }
-.intro-title { color: var(--ink); font-size: 32px; font-weight: 800; line-height: 1.25; margin: 0; }
-.intro-copy { color: var(--muted); font-size: 16px; margin-top: 8px; }
-.trust-line { color: var(--muted); font-size: 13px; padding: 12px 0 18px; border-bottom: 1px solid var(--line); }
+.app-heading { padding: 12px 0 22px; border-bottom: 1px solid var(--line); margin-bottom: 26px; }
+.app-brand { display:flex; align-items:center; gap:12px; margin-bottom:24px; }
+.app-brand-name { color:var(--ink); font-size:16px; font-weight:800; }
+.app-brand-sub { color:var(--muted); font-size:12px; margin-top:1px; }
+.eyebrow { color: var(--teal-dark); font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+.intro-title { color: var(--ink); font-size: 34px; font-weight: 800; line-height: 1.25; margin: 0; }
+.intro-copy { color: var(--muted); font-size: 15px; margin-top: 8px; line-height:1.7; }
+.trust-line { color: var(--muted); font-size: 12px; padding: 13px 0 0; }
 
 [data-testid="stChatMessage"] {
     direction: rtl;
     text-align: right;
-    border-radius: 14px;
-    margin-bottom: 14px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    box-shadow: 0 3px 12px rgba(20,44,50,.035);
 }
+[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] { line-height: 1.8; }
+[data-testid="stChatMessage"] [data-testid="stChatMessageAvatarUser"] { background: var(--teal-pale); color: var(--teal-dark); }
 
 [data-testid="stChatInput"] { direction: rtl; }
-[data-testid="stChatInput"] textarea { text-align: right; font-family: 'Heebo', sans-serif; }
+[data-testid="stChatInput"] textarea { text-align: right; font-family: 'Heebo', sans-serif; min-height:52px; }
+[data-testid="stChatInput"] > div { border-color: #b8cecb; border-radius: 8px; box-shadow: 0 8px 26px rgba(20,44,50,.08); }
+[data-testid="stChatInput"] > div:focus-within { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(8,127,121,.12), 0 8px 26px rgba(20,44,50,.08); }
 
 .stButton > button {
     direction: rtl;
     text-align: right;
     border-color: var(--line);
     color: var(--ink);
-    border-radius: 10px;
-    transition: all 0.2s ease;
+    border-radius: 7px;
+    min-height: 40px;
+    transition: color .16s ease, background .16s ease, border-color .16s ease, transform .16s ease;
 }
 
 .stButton > button:hover {
-    border-color: var(--green);
-    color: var(--green);
-    background: #f0f7f4;
+    border-color: var(--teal);
+    color: var(--teal-dark);
+    background: #f2faf8;
+    transform: translateY(-1px);
 }
+.stButton > button:focus-visible { outline: 3px solid rgba(8,127,121,.28); outline-offset: 2px; }
+[data-testid="stSidebar"] .stButton > button { width:100%; }
+[data-testid="stSidebar"] [data-testid="stTextInput"] input { border-radius:7px; background:#fff; }
+.history-group { color:#718285; font-size:11px; font-weight:700; letter-spacing:0; margin:14px 0 5px; }
+.history-empty { border:1px dashed #bacbc8; border-radius:7px; padding:12px; color:var(--muted); font-size:12px; line-height:1.6; }
+.suggestion-heading { color:var(--ink); font-size:16px; font-weight:800; margin:4px 0 4px; }
+.suggestion-copy { color:var(--muted); font-size:13px; margin-bottom:12px; }
+.stSpinner > div { border-top-color:var(--teal) !important; }
 
 .src-toggle {
     display: inline-flex; align-items: center; gap: 6px;
     margin-top: 14px; padding: 6px 13px;
     font-size: 12px; font-weight: 700;
-    color: var(--green); background: var(--green-light);
-    border: 1px solid #c5e0d8; border-radius: 999px;
+    color: var(--teal-dark); background: var(--teal-pale);
+    border: 1px solid #b9dcd5; border-radius: 7px;
     cursor: pointer; list-style: none; user-select: none;
     transition: background 0.15s ease; font-family: 'Heebo', sans-serif;
 }
 .src-toggle::-webkit-details-marker { display: none; }
-.src-toggle:hover { background: #d5ede6; }
+.src-toggle:hover { background: #d6eeea; }
 
 .src-popup {
     margin-top: 8px; padding: 12px 14px;
-    background: #ffffff; border: 1px solid #daeae3;
-    border-radius: 14px; box-shadow: 0 6px 24px rgba(8,80,60,0.10);
+    background: #ffffff; border: 1px solid var(--line);
+    border-radius: 7px; box-shadow: 0 6px 24px rgba(20,44,50,.10);
     display: flex; flex-direction: column; gap: 7px;
     direction: rtl; font-family: 'Heebo', sans-serif; max-width: 420px;
 }
@@ -104,7 +133,7 @@ _CSS = """
 .src-num {
     display: inline-flex; align-items: center; justify-content: center;
     width: 20px; height: 20px; border-radius: 6px;
-    background: var(--green-light); color: var(--green);
+    background: var(--teal-pale); color: var(--teal-dark);
     font-size: 11px; font-weight: 700; flex-shrink: 0;
 }
 
@@ -114,36 +143,44 @@ _CSS = """
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     transition: color 0.15s ease;
 }
-.src-link:hover { color: var(--green) !important; }
-.src-arrow { font-size: 11px; color: var(--green); flex-shrink: 0; }
+.src-link:hover { color: var(--teal-dark) !important; }
+.src-arrow { font-size: 11px; color: var(--teal-dark); flex-shrink: 0; }
 
 .fb-toast {
-    font-size: 12px; color: var(--green); font-weight: 700;
-    padding: 4px 10px; background: var(--green-light);
-    border-radius: 8px; border: 1px solid #c5e0d8;
+    font-size: 12px; color: var(--teal-dark); font-weight: 700;
+    padding: 4px 10px; background: var(--teal-pale);
+    border-radius: 7px; border: 1px solid #b9dcd5;
     font-family: 'Heebo', sans-serif; display: inline-block; margin-top: 8px;
 }
 .fb-card {
     margin-top: 10px; padding: 14px 16px;
-    background: #fff; border: 1px solid #daeae3;
-    border-radius: 14px; direction: rtl;
+    background: #fff; border: 1px solid var(--line);
+    border-radius: 7px; direction: rtl;
     font-family: 'Heebo', sans-serif;
-    box-shadow: 0 4px 16px rgba(8,80,60,0.08);
+        box-shadow: 0 4px 16px rgba(20,44,50,.08);
     max-width: 480px;
 }
 .fb-card-title { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 10px; }
+
+@media (max-width: 760px) {
+        .block-container { padding: 1.5rem 1rem 6rem; }
+        .intro-title { font-size: 28px; }
+        [data-testid="stChatMessage"] { padding: 14px; }
+}
 </style>
 """
 
 _HEADER_HTML = """
-<div style="display:flex;align-items:center;gap:13px;margin-bottom:22px">
+<div class="app-heading">
+<div class="app-brand">
   <div class="brand-mark">✳</div>
-  <div><div class="eyebrow">FNX DIRECT</div><div style="font-size:17px;font-weight:700">העוזר של הפניקס</div></div>
+    <div><div class="app-brand-name">FNX Direct</div><div class="app-brand-sub">העוזר החכם של הפניקס</div></div>
 </div>
 <div class="eyebrow">מידע ברור, במקום אחד</div>
 <h1 class="intro-title">איך אפשר לעזור?</h1>
 <div class="intro-copy">שאלו על ביטוח, תביעות ושירות. התשובות מבוססות על המידע באתר הפניקס.</div>
-<div class="trust-line">✳ &nbsp; תשובות מבוססות מקור &nbsp; · &nbsp; קישורים מאומתים לעמודי הפניקס</div>
+<div class="trust-line">✳ &nbsp; תשובות מבוססות מקור &nbsp; · &nbsp; קישורים לעמודי המידע הרלוונטיים</div>
+</div>
 """
 
 
@@ -158,8 +195,8 @@ def render_header(user=None):
 
 def render_sidebar(conversations, user=None, history_owner_id=None):
     with st.sidebar:
-        st.markdown("### הפניקס")
-        st.caption("עוזר מידע אישי")
+        st.markdown("### FNX Direct")
+        st.caption("העוזר החכם של הפניקס")
         _render_sidebar_user(user)
         st.divider()
         action = None
@@ -168,13 +205,28 @@ def render_sidebar(conversations, user=None, history_owner_id=None):
         if user and st.button("⚙️ הגדרות אישיות", use_container_width=True):
             action = ("preferences", None)
         st.divider()
-        st.markdown("**היסטוריית שיחות**")
-        st.text_input(
-            "חיפוש שיחה",
-            placeholder="חיפוש בכותרת או בתוכן",
-            key=f"history_search_{history_owner_id or 'guest'}",
-        )
-        for conversation in conversations:
+        search_query = ""
+        if user:
+            st.markdown("**השיחות שלי**")
+            st.page_link(history_page, label="היסטוריה מלאה")
+            search_query = st.text_input(
+                "חיפוש שיחה",
+                placeholder="חיפוש בכותרת או בתוכן",
+                key=f"history_search_{history_owner_id or 'guest'}",
+            )
+        today = date.today()
+        group_labels = {"today": "היום", "week": "7 הימים האחרונים", "older": "קודמות"}
+        last_group = None
+        for conversation in conversations if user else []:
+            try:
+                updated = datetime.fromisoformat(conversation.get("updated_at", "")).date()
+            except (TypeError, ValueError):
+                updated = None
+            age_days = (today - updated).days if updated else 8
+            group = "today" if age_days <= 0 else "week" if age_days <= 7 else "older"
+            if group != last_group:
+                st.markdown(f'<div class="history-group">{group_labels[group]}</div>', unsafe_allow_html=True)
+                last_group = group
             conversation_id = conversation["id"]
             editing_id = st.session_state.get("editing_conversation_id")
             deleting_id = st.session_state.get("deleting_conversation_id")
@@ -230,8 +282,9 @@ def render_sidebar(conversations, user=None, history_owner_id=None):
                 st.caption("השיחה תוסתר רק מההיסטוריה שלך; הנתונים יישארו במאגר.")
                 if st.button("ביטול הסרה", key=f"cancel_delete_{conversation_id}"):
                     action = ("cancel_delete", conversation_id)
-        if not conversations:
-            st.caption("לא נמצאו שיחות.")
+        if user and not conversations:
+            empty_message = "לא נמצאו שיחות מתאימות. נסו מילות חיפוש אחרות." if search_query else "השיחות שלכם יופיעו כאן אחרי שתתחילו לשאול."
+            st.markdown(f'<div class="history-empty">{empty_message}</div>', unsafe_allow_html=True)
         st.divider()
         st.markdown("**נושאים שאפשר לשאול עליהם**")
         st.caption("תביעות · ביטוח רכב · ביטוח דירה · ביטוח נסיעות")
@@ -252,10 +305,7 @@ def _render_sidebar_user(user):
             unsafe_allow_html=True,
         )
         st.caption(user.get("email", ""))
-        if st.button("התנתקות", use_container_width=True):
-            auth_ui.logout()
-            st.session_state.pop("landing_done", None)
-            st.rerun()
+        st.page_link(logout_page, label="התנתקות")
     else:
         st.caption("כניסה כאורח")
         if st.button("התחברות / הרשמה", use_container_width=True, type="primary"):
@@ -264,7 +314,7 @@ def _render_sidebar_user(user):
 
 
 def render_suggestions():
-    st.markdown("**אפשר להתחיל מכאן**")
+    st.markdown('<div class="suggestion-heading">אפשר להתחיל מכאן</div><div class="suggestion-copy">בחרו נושא או כתבו שאלה משלכם</div>', unsafe_allow_html=True)
     suggestions = [
         "איך מגישים תביעה על נזקי מים?",
         'מה כולל ביטוח נסיעות לחו"ל?',
@@ -279,19 +329,92 @@ def render_suggestions():
 
 
 def render_messages(messages, on_feedback=None):
+    selected_question = None
     for idx, message in enumerate(messages):
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
                 st.markdown(message["content"])
-                if message.get("_write_id"):
-                    st.caption("שומר את התשובה...")
-                if message.get("_write_error"):
-                    st.warning("התשובה לא נשמרה בהיסטוריה.")
+                render_copy_button(message["content"])
+                follow_up_questions = message.get("follow_up_questions") or []
+                if not follow_up_questions and message.get("follow_up_question"):
+                    follow_up_questions = [message["follow_up_question"]]
+                if follow_up_questions:
+                    st.caption("אפשר להמשיך מכאן")
+                    message_id = message.get("message_id", idx)
+                    for option_idx, follow_up_question in enumerate(follow_up_questions):
+                        if st.button(
+                            f"💬 {follow_up_question}",
+                            key=f"follow_up_{message_id}_{option_idx}",
+                            use_container_width=True,
+                        ):
+                            selected_question = follow_up_question
                 render_sources(message.get("sources"))
                 if on_feedback and message.get("message_id"):
                     render_feedback_buttons(message["message_id"], idx)
             else:
                 st.markdown(message["content"])
+    return selected_question
+
+
+def render_copy_button(content):
+        escaped_content = html.escape(content)
+        copy_button_html = f"""
+        <textarea id="copy-content" hidden>{escaped_content}</textarea>
+        <button id="copy-button" type="button" title="העתקת התשובה" aria-label="העתקת התשובה">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="8" y="8" width="12" height="13" rx="2"></rect>
+                <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"></path>
+            </svg>
+        </button>
+        <span id="copy-status" role="status" aria-live="polite"></span>
+        <style>
+            body {{ margin: 0; direction: rtl; font-family: sans-serif; }}
+            #copy-button {{
+                display: inline-flex; align-items: center; justify-content: center;
+                width: 36px; height: 36px; padding: 8px; border: 1px solid #dce5df;
+                border-radius: 8px; color: #687775; background: #fff; cursor: pointer;
+            }}
+            #copy-button:hover, #copy-button:focus-visible {{
+                color: #087e70; border-color: #087e70; background: #f0f7f4;
+            }}
+            #copy-button:focus-visible {{ outline: 2px solid #087e70; outline-offset: 2px; }}
+            #copy-button svg {{ width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }}
+            #copy-status {{ margin-right: 8px; color: #087e70; font-size: 12px; }}
+        </style>
+        <script>
+            const button = document.getElementById("copy-button");
+            const originalIcon = button.innerHTML;
+            button.addEventListener("click", async () => {{
+                const text = document.getElementById("copy-content").value;
+                try {{
+                    if (navigator.clipboard && window.isSecureContext) {{
+                        await navigator.clipboard.writeText(text);
+                    }} else {{
+                        const field = document.createElement("textarea");
+                        field.value = text;
+                        field.style.position = "fixed";
+                        field.style.opacity = "0";
+                        document.body.appendChild(field);
+                        field.select();
+                        const copied = document.execCommand("copy");
+                        field.remove();
+                        if (!copied) throw new Error("Clipboard access denied");
+                    }}
+                    button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>';
+                    button.title = "הועתק!";
+                    document.getElementById("copy-status").textContent = "הועתק!";
+                    setTimeout(() => {{
+                        button.innerHTML = originalIcon;
+                        button.title = "העתקת התשובה";
+                        document.getElementById("copy-status").textContent = "";
+                    }}, 2000);
+                }} catch (error) {{
+                    document.getElementById("copy-status").textContent = "לא ניתן להעתיק כרגע";
+                }}
+            }});
+        </script>
+        """
+        components.html(copy_button_html, height=44, scrolling=False)
 
 
 def render_feedback_buttons(message_id, idx):

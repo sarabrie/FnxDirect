@@ -2,7 +2,8 @@
 
 ## Run with Docker
 
-1. Copy `.env.example` to `.env` and set `GEMINI_API_KEY`.
+1. Copy `.env.example` to `.env` and set `GEMINI_API_KEY`, `JWT_SECRET`, and `BASE_URL`.
+   For Google sign-in, also set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
 2. Start the app:
 
    ```sh
@@ -10,6 +11,17 @@
    ```
 
 3. Open <http://localhost:8501>.
+
+The app routes are `/` (sign-in), `/chat` (authenticated chat), `/history`, and
+`/logout`. Google OAuth returns to `/auth_google_callback`. Set `BASE_URL` to the
+public HTTPS origin in production (for example, `https://assistant.example.com`);
+the full authorized redirect URI is `BASE_URL/auth_google_callback`. Streamlit
+supports single-segment page paths only, so the callback uses an underscore
+instead of nested `/auth/google/callback`. If
+`GOOGLE_REDIRECT_URI` is set, it overrides the derived URI and must match exactly
+in Google Cloud Console. Do not commit `.env`; configure the same values as secret
+environment variables in the cloud deployment. Set `ADMIN_SECRET` to enable the
+admin panel.
 
 The first image build downloads the multilingual embedding model (about 480 MB)
 into the image. The app page appears without waiting for the model; it loads the
@@ -29,32 +41,3 @@ docker compose run --rm app python fnx_rag_pipeline.py
 
 To stop the app, run `docker compose down`. To also remove saved conversation
 history, run `docker compose down --volumes`.
-
-## Deploy to Vercel
-
-The repository includes a Vercel Services configuration for the FastAPI auth
-API and the Streamlit app. Before deploying:
-
-1. Create a managed PostgreSQL database (for example, a Neon project) and copy
-   its connection string. The auth API requires PostgreSQL; MySQL is not
-   supported by its current driver and schema.
-2. Apply the auth schema to that database from the repository root:
-
-   ```sh
-   psql "<DATABASE_URL>" -f auth/migrations/001_initial.sql
-   ```
-
-3. Import this repository into Vercel and add these environment variables in
-   the project settings:
-   - `DATABASE_URL` — the managed PostgreSQL connection string.
-   - `JWT_SECRET` and `CSRF_SECRET` — generate separate random values, for
-     example with `python -c "import secrets; print(secrets.token_hex(48))"`.
-   - `GEMINI_API_KEY` — required by the Streamlit app's assistant.
-   - `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` — required only if enabling
-     Google sign-in; set the OAuth redirect URI to the deployed app URL and
-     configure `GOOGLE_REDIRECT_URI` to the same URL.
-   - `FIRE_CRAWL_API_KEY` — only needed when refreshing the website index.
-4. Deploy with the Vercel project using Services. Verify `/health` returns
-   `{"status":"ok"}` and the root URL loads the Streamlit app.
-
-Do not commit production credentials or put them in `vercel.json`.

@@ -1,7 +1,6 @@
-import logging
 import os
+import re
 import ssl
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 from urllib.parse import urlsplit
@@ -26,9 +25,11 @@ httpx.AsyncClient.__init__ = _patched_async_init
 # ─────────────────────────────────────────────────────────────────────────────
 
 from dotenv import load_dotenv
-import streamlit as st
-from chat_history import get_chunk_scores
-from performance import timed
+import chromadb
+from google import genai
+from google.genai import types
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chat_history import get_chunk_score
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
@@ -42,6 +43,16 @@ def _query_results(results, key):
         return []
     first_result = values[0]
     return first_result if isinstance(first_result, list) else []
+
+
+def _split_follow_ups(text):
+    pattern = r"\[FOLLOW_UP\](.*?)\[/FOLLOW_UP\]"
+    follow_ups = [
+        " ".join(match.split())
+        for match in re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+    ]
+    answer = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    return answer, list(dict.fromkeys(follow_ups))[:3]
 
 
 def _source_url(metadata):
@@ -78,9 +89,6 @@ def _is_generic_homepage_url(url):
 
 
 def create_collection():
-    import chromadb
-    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-
     chroma_client = chromadb.PersistentClient(path=DB_PATH)
     return chroma_client.get_collection(
         name="fnx_website_chunks_multilingual",
@@ -90,126 +98,31 @@ def create_collection():
     )
 
 
-def _create_gemini_resources():
+def _get_gemini_client():
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
         raise RuntimeError("חסר GEMINI_API_KEY בקובץ .env.")
-    with timed("model.client_init"):
-        from google import genai
-        from google.genai import types
-
-        return genai.Client(api_key=gemini_api_key), types
-
-
-def _log_gemini_resources_failure(future):
-    if future.cancelled():
-        return
-    error = future.exception()
-    if error is not None:
-        logging.getLogger("fnxdirect.performance").error(
-            "model.client_init_failed error_type=%s",
-            type(error).__name__,
-        )
-
-
-@st.cache_resource(show_spinner=False)
-def _get_gemini_resources_loader():
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fnxdirect-gemini")
-    future = executor.submit(_create_gemini_resources)
-    future.add_done_callback(_log_gemini_resources_failure)
-    return executor, future
-
-
-def warm_gemini_client():
-    _get_gemini_resources_loader()
-
-
-def _get_gemini_resources():
-    _, future = _get_gemini_resources_loader()
-    try:
-        return future.result()
-    except Exception:
-        _get_gemini_resources_loader.clear()
-        raise
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _query_collection_cached(_collection, question, n_results, collection_path):
-    return _collection.query(query_texts=[question], n_results=n_results)
-
-
-def _stream_model_response(prompt):
-    with timed("rag.model_setup"):
-        client, types = _get_gemini_resources()
-        config = types.GenerateContentConfig(
-            max_output_tokens=512,
-            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
-        )
-    last_error = None
-    stream_started_at = time.perf_counter()
-    for attempt in range(3):
-        emitted_text = False
-        try:
-            with timed("rag.model"):
-                for chunk in client.models.generate_content_stream(
-                    model="gemini-3.8-flash",
-                    contents=prompt,
-                    config=config,
-                ):
-                    text = chunk.text
-                    if not text:
-                        continue
-                    if not emitted_text:
-                        emitted_text = True
-                        logging.getLogger("fnxdirect.performance").info(
-                            "performance phase=rag.model_first_token duration_ms=%.2f",
-                            (time.perf_counter() - stream_started_at) * 1000,
-                        )
-                    yield text
-            if not emitted_text:
-                yield "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
-            return
-        except Exception as error:
-            last_error = error
-            retryable = "503" in str(error) or "UNAVAILABLE" in str(error)
-            if retryable and not emitted_text and attempt < 2:
-                with timed("rag.model_retry_wait"):
-                    time.sleep(3)
-                continue
-            logging.getLogger("fnxdirect.performance").error(
-                "rag.stream_failed error_type=%s",
-                type(error).__name__,
-            )
-            raise
-    raise last_error
+    return genai.Client(api_key=gemini_api_key)
 
 
 def generate_rag_response(question, collection, user_prefs=None):
     """Returns (answer_text, sources, chunk_ids, prompt_text)."""
-    with timed("rag.retrieval"):
-        result_count = min(10, collection.count())
-        if result_count == 0:
-            return "זה לא כתוב באתר הפניקס.", [], [], ""
+    result_count = min(10, collection.count())
+    if result_count == 0:
+        return "זה לא כתוב באתר הפניקס.", [], [], "", []
 
-        results = _query_collection_cached(
-            collection,
-            question,
-            result_count,
-            DB_PATH,
-        )
-
+    results = collection.query(query_texts=[question], n_results=result_count)
     documents = results.get("documents", [[]])[0]
     metadatas = results.get("metadatas", [[]])[0]
     ids = results.get("ids", [[]])[0]
 
     if not documents:
-        return "זה לא כתוב באתר הפניקס.", [], [], ""
+        return "זה לא כתוב באתר הפניקס.", [], [], "", []
 
     context_text = ""
     sources = []
     chunk_ids = []
     scored = []
-    valid_results = []
     for document, metadata, chunk_id in zip(documents, metadatas, ids):
         if not isinstance(document, str) or not document.strip():
             continue
@@ -217,33 +130,27 @@ def generate_rag_response(question, collection, user_prefs=None):
             metadata = {}
         if _is_generic_homepage_url(metadata.get("url")):
             continue
-        valid_results.append((chunk_id, document, metadata))
+        scored.append((get_chunk_score(chunk_id), chunk_id, document, metadata))
 
-    chunk_scores = get_chunk_scores(chunk_id for chunk_id, _, _ in valid_results)
-    with timed("rag.rerank"):
-        for chunk_id, document, metadata in valid_results:
-            scored.append((chunk_scores.get(chunk_id, 1.0), chunk_id, document, metadata))
+    # Re-rank: penalised chunks sink to the bottom, still included for transparency
+    scored.sort(key=lambda x: x[0], reverse=True)
 
-        # Re-rank: penalised chunks sink to the bottom, still included for transparency
-        scored.sort(key=lambda x: x[0], reverse=True)
-
-        for _, chunk_id, document, metadata in scored:
-            title = metadata.get("title")
-            if title:
-                context_text += f"- עמוד: {title}\n  קטע: {document}\n"
-            else:
-                context_text += f"- {document}\n"
-            sources.append({
-                "snippet": document,
-                "url": _source_url(metadata),
-                "title": title if isinstance(title, str) else None,
-            })
-            chunk_ids.append(chunk_id)
+    for _, chunk_id, document, metadata in scored:
+        title = metadata.get("title")
+        if title:
+            context_text += f"- עמוד: {title}\n  קטע: {document}\n"
+        else:
+            context_text += f"- {document}\n"
+        sources.append({
+            "snippet": document,
+            "url": _source_url(metadata),
+            "title": title if isinstance(title, str) else None,
+        })
+        chunk_ids.append(chunk_id)
 
     if not context_text:
-        return "זה לא כתוב באתר הפניקס.", [], [], ""
+        return "זה לא כתוב באתר הפניקס.", [], [], "", []
 
-    prompt_started_at = time.perf_counter()
     prefs = user_prefs or {}
     preferred_name = prefs.get("preferred_name")
     response_length = prefs.get("response_length", "standard")
@@ -271,6 +178,7 @@ def generate_rag_response(question, collection, user_prefs=None):
 בדוק את כל הקטעים לפני המענה. מידע עשוי להופיע תחת כותרת אחרת או בניסוח שונה מהשאלה.
 אם קטע עונה על חלק מהשאלה, מסור את המידע הנתמך וציין אילו פרטים אינם מופיעים.
 אל תוסיף עובדות שאינן מופיעות בקטעים. אם אף קטע אינו מכיל מידע רלוונטי, ענה בדיוק: "זה לא כתוב באתר הפניקס."
+בסוף התשובה, הוסף עד 3 הצעות המשך קצרות ומזמינות, בנושאים שונים שאפשר לענות עליהם מתוך הקטעים המצורפים. נסח כל הצעה כהזמנה, למשל: "רוצה לדעת גם איך מגישים תביעה?", ולא כשאלת מידע ישירה. הצע רק נושאים שיש עליהם מידע נוסף בקטעים; אם יש רק נושא אחד רלוונטי, הצע רק אותו. כתוב כל הצעה בנפרד ובפורמט המדויק [FOLLOW_UP]רוצה לדעת גם...?[/FOLLOW_UP], אחרי התשובה.
 המקורות יוצגו בנפרד מהתשובה.
 
 הקשר מתוך האתר:
@@ -279,15 +187,35 @@ def generate_rag_response(question, collection, user_prefs=None):
 שאלה: {question}
 """
 
-    logging.getLogger("fnxdirect.performance").info(
-        "performance phase=rag.prompt_assembly duration_ms=%.2f",
-        (time.perf_counter() - prompt_started_at) * 1000,
+    config = types.GenerateContentConfig(
+        max_output_tokens=512,
+        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
     )
-    return _stream_model_response(prompt), sources, chunk_ids, prompt
+
+    last_error = None
+    for attempt in range(3):
+        client = _get_gemini_client()
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.8-flash", contents=prompt, config=config
+            )
+            client.close()
+            answer, follow_up_questions = _split_follow_ups(
+                response.text or "לא הצלחתי לנסח תשובה כרגע. נסו שוב בעוד רגע."
+            )
+            return answer, sources, chunk_ids, prompt, follow_up_questions
+        except Exception as e:
+            client.close()
+            last_error = e
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                time.sleep(3)
+                continue
+            raise
+    raise last_error
 
 
 def generate_conversation_title(question):
-    client, _ = _get_gemini_resources()
+    client = _get_gemini_client()
     response = client.models.generate_content(
         model="gemini-3.8-flash",
         contents=(
