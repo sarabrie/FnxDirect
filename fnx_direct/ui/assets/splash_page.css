@@ -1,0 +1,9 @@
+[data-testid="stHeader"], [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display: none; }
+.stApp {
+    background:
+      radial-gradient(ellipse at 14% 84%, rgba(215,154,52,.10), transparent 27%),
+      radial-gradient(ellipse at 88% 12%, rgba(8,127,121,.11), transparent 34%),
+      #f3f7f5;
+}
+.block-container { max-width: 100%; padding: 0 !important; }
+.st-key-splash iframe { height: 100vh !important; display: block; }

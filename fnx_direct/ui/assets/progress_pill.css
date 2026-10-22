@@ -1,0 +1,13 @@
+.load-pill {
+    position: fixed; bottom: 18px; left: 18px; z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    width: 54px; height: 54px; border-radius: 50%;
+    background: #fff; box-shadow: 0 8px 24px rgba(20,44,50,.16);
+    animation: load-pill-in .4s ease both;
+}
+.load-pill svg { position: absolute; inset: 5px; transform: rotate(-90deg); }
+.load-pill circle { fill: none; stroke-width: 4; }
+.load-pill .track { stroke: #dbe8e5; }
+.load-pill .fill { stroke: #087f79; stroke-linecap: round; }
+.load-pill span { font: 800 12px 'Heebo', sans-serif; color: #08645f; font-variant-numeric: tabular-nums; direction: ltr; }
+@keyframes load-pill-in { from { opacity: 0; transform: scale(.8); } }

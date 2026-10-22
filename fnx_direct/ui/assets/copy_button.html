@@ -1,0 +1,57 @@
+<!doctype html>
+<html dir="rtl"><head><meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: transparent; }
+  button {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0; color: #7a8b8d;
+    background: transparent; border: 1px solid transparent; border-radius: 7px;
+    cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+  }
+  button:hover { background: #e5f4f1; color: #08645f; }
+  button:focus-visible { outline: 3px solid rgba(8,127,121,.28); outline-offset: 2px; }
+  svg { width: 18px; height: 18px; }
+  .done, button.copied .copy, button.failed .copy { display: none; }
+  button.copied .done { display: block; }
+  button.copied { color: #087f79; background: #e5f4f1; }
+  button.failed { color: #b42318; }
+</style></head>
+<body><button type="button" title="__TITLE__" aria-label="__TITLE__">
+  <svg class="copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+    <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
+  </svg>
+  <svg class="done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M5 12.5l4.5 4.5L19 7.5"></path>
+  </svg>
+</button>
+<script>
+  const text = __TEXT__;
+  const title = __LABEL__;
+  const btn = document.querySelector("button");
+  function fallbackCopy() {
+    const area = document.createElement("textarea");
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok ? Promise.resolve() : Promise.reject();
+  }
+  function flash(state, message) {
+    btn.classList.add(state);
+    btn.title = message;
+    btn.setAttribute("aria-label", message);
+    setTimeout(() => {
+      btn.classList.remove(state);
+      btn.title = title;
+      btn.setAttribute("aria-label", title);
+    }, 2000);
+  }
+  btn.addEventListener("click", () => {
+    const copy = navigator.clipboard ? navigator.clipboard.writeText(text).catch(fallbackCopy) : fallbackCopy();
+    copy.then(() => flash("copied", "הועתק!"), () => flash("failed", "ההעתקה לא זמינה"));
+  });
+</script></body></html>

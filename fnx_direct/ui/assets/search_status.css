@@ -1,0 +1,14 @@
+.fnx-status { display:flex; align-items:center; gap:10px; min-height:28px; color:var(--teal-dark, #08645f);
+    font-size:14px; font-weight:600; }
+.fnx-status-dot { width:14px; height:14px; border-radius:50%; flex:none;
+    border:2px solid #b9dcd5; border-top-color:#087f79; animation: fnx-spin .8s linear infinite; }
+.fnx-status-text { position:relative; flex:1; height:22px; }
+.fnx-status-step { position:absolute; inset-inline-start:0; top:0; white-space:nowrap; opacity:0; }
+@keyframes fnx-spin { to { transform: rotate(360deg); } }
+@keyframes fnx-step { 0% { opacity:0; transform:translateY(4px); } 12%, 85% { opacity:1; transform:none; }
+    100% { opacity:0; transform:translateY(-4px); } }
+@keyframes fnx-step-last { 0% { opacity:0; transform:translateY(4px); } 12%, 100% { opacity:1; transform:none; } }
+@media (prefers-reduced-motion: reduce) {
+    .fnx-status-dot { animation-duration: 2s; }
+    .fnx-status-step { animation-duration: .01s !important; }
+}

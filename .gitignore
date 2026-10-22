@@ -1,8 +1,16 @@
+# Secrets
 .env
+
+# Python
 __pycache__/
-*.pyc
-chat_history.sqlite3
-chat_history.sqlite3-*
+*.py[cod]
+.venv/
+venv/
+
+# Runtime data (the ChromaDB index in data/fnx_db is tracked)
+data/*.sqlite3
+data/*.sqlite3-*
+data/.warmup_seconds
+
+# Editors
 .vscode/
-.warmup_seconds
-auth.sqlite3
