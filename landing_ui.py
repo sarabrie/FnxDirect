@@ -173,6 +173,8 @@ _CSS = """
     transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
 }
 .google-btn:hover { background: #f7faf9; border-color: #9bb9b5; box-shadow: 0 3px 10px rgba(20,44,50,.07); }
+/* Streamlit styles every markdown link (blue + underline); the Google button is a button, not a link */
+a.google-btn, a.google-btn:hover, a.google-btn:visited { color: #3c4043 !important; text-decoration: none !important; }
 .google-btn:focus-visible { outline: 3px solid rgba(8,127,121,.32); outline-offset: 2px; }
 .google-logo { width: 20px; height: 20px; }
 
