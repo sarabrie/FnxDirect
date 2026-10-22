@@ -3,7 +3,6 @@ import re
 from datetime import date, datetime
 from urllib.parse import urlsplit
 import streamlit as st
-import streamlit.components.v1 as components
 from routes import history_page, landing_page, logout_page
 
 DISLIKE_REASONS = [
@@ -399,7 +398,6 @@ def render_messages(messages, on_feedback=None):
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
                 st.markdown(message["content"])
-                render_copy_button(message["content"])
                 follow_up_questions = message.get("follow_up_questions") or []
                 if not follow_up_questions and message.get("follow_up_question"):
                     follow_up_questions = [message["follow_up_question"]]
@@ -420,67 +418,6 @@ def render_messages(messages, on_feedback=None):
             else:
                 st.markdown(message["content"])
     return selected_question
-
-
-def render_copy_button(content):
-        escaped_content = html.escape(content)
-        copy_button_html = f"""
-        <textarea id="copy-content" hidden>{escaped_content}</textarea>
-        <button id="copy-button" type="button" title="העתקת התשובה" aria-label="העתקת התשובה">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="8" y="8" width="12" height="13" rx="2"></rect>
-                <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"></path>
-            </svg>
-        </button>
-        <span id="copy-status" role="status" aria-live="polite"></span>
-        <style>
-            body {{ margin: 0; direction: rtl; font-family: sans-serif; }}
-            #copy-button {{
-                display: inline-flex; align-items: center; justify-content: center;
-                width: 36px; height: 36px; padding: 8px; border: 1px solid #dce5df;
-                border-radius: 8px; color: #687775; background: #fff; cursor: pointer;
-            }}
-            #copy-button:hover, #copy-button:focus-visible {{
-                color: #087e70; border-color: #087e70; background: #f0f7f4;
-            }}
-            #copy-button:focus-visible {{ outline: 2px solid #087e70; outline-offset: 2px; }}
-            #copy-button svg {{ width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }}
-            #copy-status {{ margin-right: 8px; color: #087e70; font-size: 12px; }}
-        </style>
-        <script>
-            const button = document.getElementById("copy-button");
-            const originalIcon = button.innerHTML;
-            button.addEventListener("click", async () => {{
-                const text = document.getElementById("copy-content").value;
-                try {{
-                    if (navigator.clipboard && window.isSecureContext) {{
-                        await navigator.clipboard.writeText(text);
-                    }} else {{
-                        const field = document.createElement("textarea");
-                        field.value = text;
-                        field.style.position = "fixed";
-                        field.style.opacity = "0";
-                        document.body.appendChild(field);
-                        field.select();
-                        const copied = document.execCommand("copy");
-                        field.remove();
-                        if (!copied) throw new Error("Clipboard access denied");
-                    }}
-                    button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>';
-                    button.title = "הועתק!";
-                    document.getElementById("copy-status").textContent = "הועתק!";
-                    setTimeout(() => {{
-                        button.innerHTML = originalIcon;
-                        button.title = "העתקת התשובה";
-                        document.getElementById("copy-status").textContent = "";
-                    }}, 2000);
-                }} catch (error) {{
-                    document.getElementById("copy-status").textContent = "לא ניתן להעתיק כרגע";
-                }}
-            }});
-        </script>
-        """
-        components.html(copy_button_html, height=44, scrolling=False)
 
 
 def render_feedback_buttons(message_id, idx):
