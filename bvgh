@@ -1,0 +1,8 @@
+  docker-environment[m
+  feature/chat-history[m
+  feature/chat-history-options[m
+  feature/postgres-migration[m
+  main[m
+* [32mmain-all-features[m
+  perf/speed-optimizations[m
+  perf/speed-up-collection[m
