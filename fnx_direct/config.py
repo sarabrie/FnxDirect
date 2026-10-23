@@ -1,11 +1,17 @@
-"""Paths and settings shared by every part of the app. Loads .env once, on first import."""
+"""
+Paths and settings shared by every part of the app.
+Settings come from environment variables (e.g. Render's Environment). A local .env file, if there
+is one, only fills in variables that are not already set; it is never required.
+"""
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT_DIR / ".env")
+_ENV_FILE = ROOT_DIR / ".env"
+if _ENV_FILE.is_file():
+    load_dotenv(_ENV_FILE, override=False)
 
 DATA_DIR = ROOT_DIR / "data"
 

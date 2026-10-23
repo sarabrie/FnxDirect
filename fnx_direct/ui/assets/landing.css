@@ -68,6 +68,10 @@
     margin: 0; line-height: 1.8; max-width: 480px;
 }
 
+/* Demo chat under the headline (components/loading.render_demo_chat) */
+.st-key-demo_chat { margin-top: 4px; }
+.st-key-demo_chat iframe { display: block; border: 0; background: transparent !important; color-scheme: light; }
+
 .hero-kicker {
     display: inline-flex; align-items: center; gap: 8px;
     color: var(--teal-dark); font-size: 13px; font-weight: 700;
@@ -171,6 +175,8 @@ a.google-btn, a.google-btn:hover, a.google-btn:visited { color: #3c4043 !importa
     .hero-title { font-size: 40px; }
     .hero-sub { font-size: 15px; line-height: 1.7; margin-bottom: 16px; }
     .hero-points { gap: 10px; margin-top: 18px; }
+    .st-key-demo_chat { margin-top: 0; }
+    .st-key-demo_chat iframe { height: 370px !important; }
     .st-key-auth_card { padding: 20px 22px 14px !important; }
     .card-sub { margin-bottom: 12px; }
     .trust-row { margin-top: 1rem; padding-top: 10px; }
@@ -182,6 +188,7 @@ a.google-btn, a.google-btn:hover, a.google-btn:visited { color: #3c4043 !importa
     .hero-title { font-size: 36px; }
     .hero-sub { font-size: 15px; }
     .hero-points { margin: 22px 0 30px; }
+    .st-key-demo_chat { display: none; }  /* keep the sign-in form near the top on phones */
     .st-key-auth_card { padding: 22px 18px 16px !important; }
     .trust-row { gap: 12px 20px; margin-top: 2rem; }
     main [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child { order: -1; }

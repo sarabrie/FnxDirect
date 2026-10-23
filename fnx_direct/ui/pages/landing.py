@@ -7,7 +7,7 @@ from fnx_direct.auth import session
 from fnx_direct.auth.accounts import login_user, register_user
 from fnx_direct.auth.google_oauth import build_google_auth_url
 from fnx_direct.ui import navigation
-from fnx_direct.ui.components.loading import render_progress_pill
+from fnx_direct.ui.components.loading import render_demo_chat, render_progress_pill
 from fnx_direct.ui.styles import inject_css, read_asset
 
 _TAB_KEY = "landing_tab"
@@ -43,6 +43,7 @@ def render():
             '<div class="hero-sub">כל התשובות על הביטוח שלכם, במקום אחד.</div>'
             "</div>"
         )
+        render_demo_chat()
 
     # The rest of the search engine keeps loading while the user logs in.
     render_progress_pill()

@@ -1,0 +1,25 @@
+<!doctype html>
+<html dir="rtl" lang="he"><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #142c32; --muted: #5d7074; --teal: #087f79; --teal-dark: #08645f;
+    --teal-pale: #e5f4f1; --gold: #d79a34; --line: #d9e3e2; --surface: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: transparent; font-family: 'Heebo', 'Segoe UI', sans-serif; color: var(--ink); }
+  /* Room around the card for its shadow; the card fills the frame's height. */
+  body { padding: 18px 34px 48px; }
+  /* A shadow that fits inside the padding, so the frame's edge never clips it. */
+  .page .demo {
+    height: 100%; max-width: 470px; margin: 0 auto;
+    box-shadow: 0 14px 32px rgba(20,44,50,.10), 0 2px 8px rgba(20,44,50,.04);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01s !important; animation-iteration-count: 1 !important; }
+  }
+</style></head>
+<body class="page">
+__DEMO_CHAT__
+</body></html>

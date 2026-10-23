@@ -3,6 +3,7 @@ Loading UI for the search engine.
 - render_splash(): full-screen page until loading reaches SPLASH_UNTIL_PERCENT (50%): a progress
   ring next to a looping demo chat (question typed → "thinking" → answer typed → follow-up).
 - render_progress_pill(): small ring with the percentage, shown in the app until loading hits 100%.
+- render_demo_chat(): the same looping demo chat on its own (the sign-in page shows it).
 """
 import streamlit as st
 
@@ -35,13 +36,23 @@ def splash_done():
     return engine.has_failed() or engine.progress() >= engine.SPLASH_UNTIL_PERCENT
 
 
+def _demo_chat_html():
+    return read_asset("demo_chat.html").replace("__SCENES__", js_literal(DEMO_SCENES))
+
+
+def render_demo_chat(height=440):
+    """The looping demo chat card, in its own frame so its animation runs undisturbed by reruns."""
+    with st.container(key="demo_chat"):
+        st.iframe(read_asset("demo_page.html").replace("__DEMO_CHAT__", _demo_chat_html()), height=height)
+
+
 def render_splash():
     """Shows the loading page; reruns the app by itself once enough of the search engine is loaded."""
     inject_css("splash_page.css")
     page = (
         read_asset("splash.html")
-        .replace("__SCENES__", js_literal(DEMO_SCENES))
         .replace("__STATE__", js_literal(engine.snapshot()))
+        .replace("__DEMO_CHAT__", _demo_chat_html())
     )
     with st.container(key="splash"):
         st.iframe(page, height=640)
