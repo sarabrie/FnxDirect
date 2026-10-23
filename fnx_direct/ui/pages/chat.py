@@ -2,6 +2,8 @@
 /chat — the assistant. Each run: resolve who owns the conversation (user or guest), open the
 requested conversation, handle sidebar actions, render the transcript and answer a new question.
 """
+import threading
+
 import streamlit as st
 
 from fnx_direct.assistant.errors import is_quota_error
@@ -67,6 +69,9 @@ def render():
         st.error("לא הצלחתי לטעון את מודל החיפוש. בדקו את חיבור האינטרנט ונסו להפעיל מחדש.")
     # Progress ring until the rest of the search engine is loaded; then a rerun enables the input.
     render_progress_pill(rerun_when_ready=True)
+
+    # Open the connection to Gemini now, while the user reads / types, not when they ask.
+    threading.Thread(target=_warm_up_gemini, name="gemini-warm-up", daemon=True).start()
 
     feedback_user_id = user["sub"] if user else None
     _save_pending_feedback(conversation_id, feedback_user_id)
@@ -238,6 +243,13 @@ def _save_pending_feedback(conversation_id, user_id):
 
 
 # ── Answering ────────────────────────────────────────────────────────────────
+
+def _warm_up_gemini():
+    # Imported here: google.genai is slow to import (start.py preloads it in the background).
+    from fnx_direct.assistant import gemini
+
+    gemini.warm_up()
+
 
 def _render_pending_error(conversation_id):
     pending_error = st.session_state.get("pending_assistant_error")
